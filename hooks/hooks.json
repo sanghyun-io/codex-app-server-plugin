@@ -10,16 +10,6 @@
           }
         ]
       }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "log",
-            "message": "Codex App Server Plugin active. Run /codex-app-server-plugin:setup to verify."
-          }
-        ]
-      }
     ]
   }
 }
