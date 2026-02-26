@@ -15,6 +15,11 @@
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "[ ! -f \"$HOME/.claude/bin/codex-review.mjs\" ] && bash \"${CLAUDE_PLUGIN_ROOT}/scripts/install.sh\" 2>/dev/null; true",
+            "description": "Auto-install files if missing (PostPluginInstall fallback)"
+          },
+          {
             "type": "log",
             "message": "Codex App Server Plugin active. Run /codex-app-server-plugin:setup to verify."
           }

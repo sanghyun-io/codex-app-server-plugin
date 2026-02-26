@@ -12,41 +12,49 @@ Guide the user through verifying the complete plugin installation step by step.
 
 ---
 
-## Step 1: Check Installed Files
+## Step 1: Check and Install Files
 
-Run the following checks in parallel:
+Use the **Read tool** (not Bash) to check file existence:
+- Read `~/.claude/bin/codex-review.mjs`
+- Read `~/.claude/rules/review-protocol.md`
 
-```bash
-ls ~/.claude/bin/codex-review.mjs 2>/dev/null && echo "BIN_FOUND" || echo "BIN_MISSING"
-```
+**If both exist**: Show "✓ Plugin files installed correctly" and proceed to Step 2.
 
-```bash
-ls ~/.claude/rules/review-protocol.md 2>/dev/null && echo "RULES_FOUND" || echo "RULES_MISSING"
-```
+**If any file is missing**: Copy from plugin cache using Read + Write tools.
 
-**If BIN_MISSING or RULES_MISSING**:
-- Show which files are missing
-- Explain: "PostPluginInstall hook should have installed these automatically."
-- Guide: "Try reinstalling the plugin:"
-  ```
-  claude plugin uninstall codex-app-server-plugin@sanghyun-io
-  claude plugin install codex-app-server-plugin@sanghyun-io
-  ```
-- Stop and wait for user
+Plugin cache source paths:
+- `~/.claude/plugins/cache/codex-app-server-plugin/bin/codex-review.mjs`
+- `~/.claude/plugins/cache/codex-app-server-plugin/rules/review-protocol.md`
+- `~/.claude/plugins/cache/codex-app-server-plugin/rules/codex-plan-validation.md`
+- `~/.claude/plugins/cache/codex-app-server-plugin/rules/codex-code-review.md`
 
-**If all found**: Show "✓ Plugin files installed correctly"
+Destination paths:
+- `~/.claude/bin/codex-review.mjs`
+- `~/.claude/rules/review-protocol.md`
+- `~/.claude/rules/codex-plan-validation.md`
+- `~/.claude/rules/codex-code-review.md`
+
+Read each source file and Write to the destination. After copying show:
+"✓ Plugin files installed from cache"
+
+If cache files also don't exist, stop and report:
+"Plugin cache not found at ~/.claude/plugins/cache/codex-app-server-plugin/. Please reinstall: `claude plugin install codex-app-server-plugin@sanghyun-io`"
 
 ---
 
 ## Step 2: Check Node.js
 
+Try with Bash:
+
 ```bash
 node --version 2>/dev/null || echo "NOT_FOUND"
 ```
 
-**If NOT_FOUND**:
-- Show: "❌ Node.js is required (v18+). Install from https://nodejs.org"
-- Stop and wait
+**If Bash is unavailable** (permission denied / don't ask mode):
+- Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `node --version` (v18+ required)"
+- Proceed to Step 3.
+
+**If NOT_FOUND**: Show "❌ Node.js is required (v18+). Install from https://nodejs.org" and stop.
 
 **If found**: Show "✓ Node.js {version}"
 
@@ -54,9 +62,15 @@ node --version 2>/dev/null || echo "NOT_FOUND"
 
 ## Step 3: Check codex CLI
 
+Try with Bash:
+
 ```bash
 codex --version 2>/dev/null || echo "NOT_FOUND"
 ```
+
+**If Bash is unavailable**:
+- Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `codex --version`"
+- Proceed to Step 4.
 
 **If NOT_FOUND**:
 Ask the user using AskUserQuestion:
@@ -76,10 +90,7 @@ Ask the user using AskUserQuestion:
 }
 ```
 
-If "지금 설치":
-- Run: `npm install -g @anthropic-ai/codex`
-- Re-verify with `codex --version`
-- If still fails, stop and report error
+If "지금 설치": Run `npm install -g @anthropic-ai/codex` then re-verify.
 
 **If found**: Show "✓ codex CLI {version}"
 
@@ -96,7 +107,7 @@ Ask the user using AskUserQuestion:
     "header": "인증",
     "multiSelect": false,
     "options": [
-      {"label": "이미 로그인했습니다", "description": "동작 확인 테스트를 실행합니다"},
+      {"label": "이미 로그인했습니다", "description": "다음 단계로 진행합니다"},
       {"label": "아직 로그인하지 않았습니다", "description": "codex login 방법을 안내합니다"}
     ]
   }]
@@ -104,45 +115,27 @@ Ask the user using AskUserQuestion:
 ```
 
 **If "아직 로그인하지 않았습니다"**:
-Show the following and stop:
+Show and stop:
 ```
 터미널에서 다음을 실행하세요:
 
-  $ codex login
+  BROWSER=/bin/false codex login
 
-브라우저가 열리면 ChatGPT 계정으로 로그인하세요.
 완료 후 /codex-app-server-plugin:setup 을 다시 실행하세요.
 ```
 
-**If "이미 로그인했습니다"**: Proceed to Step 5
+**If "이미 로그인했습니다"**: Proceed to Step 5.
 
 ---
 
-## Step 5: Verify Binary Works
+## Step 5: Check CLAUDE.md Rules Import
 
-Run:
+Use the **Read tool** to read `~/.claude/CLAUDE.md`.
+Check if the content contains "review-protocol".
 
-```bash
-node ~/.claude/bin/codex-review.mjs --help 2>&1; echo "EXIT_CODE: $?"
-```
+**If import exists**: Show "✓ Rules imported in CLAUDE.md"
 
-**If EXIT_CODE: 0**: Show "✓ codex-review.mjs is working correctly"
-
-**If other exit code**:
-- Show the error output
-- Stop and report: "Binary check failed. Please check Node.js version (v18+ required)."
-
----
-
-## Step 6: CLAUDE.md Rules Check
-
-Run:
-
-```bash
-grep -l "review-protocol" ~/.claude/CLAUDE.md 2>/dev/null && echo "IMPORTED" || echo "NOT_IMPORTED"
-```
-
-**If NOT_IMPORTED**:
+**If not imported**:
 Ask the user using AskUserQuestion:
 
 ```json
@@ -161,7 +154,7 @@ Ask the user using AskUserQuestion:
 ```
 
 **If "자동으로 추가해주세요"**:
-Append to `~/.claude/CLAUDE.md`:
+Append these 3 lines to `~/.claude/CLAUDE.md` using the Edit tool:
 ```
 @~/.claude/rules/review-protocol.md
 @~/.claude/rules/codex-plan-validation.md
@@ -170,18 +163,11 @@ Append to `~/.claude/CLAUDE.md`:
 Show: "✓ CLAUDE.md에 rules import를 추가했습니다"
 
 **If "직접 추가하겠습니다"**:
-Show:
-```
-~/.claude/CLAUDE.md 에 다음 3줄을 추가하세요:
-
-@~/.claude/rules/review-protocol.md
-@~/.claude/rules/codex-plan-validation.md
-@~/.claude/rules/codex-code-review.md
-```
+Show the 3 lines above.
 
 ---
 
-## Step 7: Setup Complete
+## Step 6: Setup Complete
 
 Show the final summary:
 
