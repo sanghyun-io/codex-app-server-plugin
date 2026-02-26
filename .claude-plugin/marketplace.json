@@ -1,0 +1,25 @@
+{
+  "name": "sanghyun-io",
+  "owner": {
+    "name": "sanghyun-io",
+    "email": "ppkimsanh@gmail.com"
+  },
+  "metadata": {
+    "description": "sanghyun-io's Claude Code plugins",
+    "version": "1.0.0",
+    "pluginRoot": "."
+  },
+  "plugins": [
+    {
+      "name": "codex-app-server-plugin",
+      "source": ".",
+      "description": "Integrates Codex App Server with Claude Code for stateful plan validation and code review",
+      "version": "1.0.0",
+      "author": { "name": "sanghyun-io" },
+      "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
+      "repository": "https://github.com/sanghyun-io/codex-app-server-plugin",
+      "license": "MIT",
+      "keywords": ["codex", "code-review", "plan-validation", "gpt", "review"]
+    }
+  ]
+}

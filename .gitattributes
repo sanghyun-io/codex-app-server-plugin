@@ -1,0 +1,5 @@
+# Shell scripts must always use LF
+scripts/*.sh text eol=lf
+
+# Default: auto
+* text=auto

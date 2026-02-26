@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PostPluginInstall": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/install.sh",
+            "description": "Install codex-review binary and rules to ~/.claude/"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "log",
+            "message": "Codex App Server Plugin active. Run /codex-app-server-plugin:setup to verify."
+          }
+        ]
+      }
+    ]
+  }
+}
