@@ -12,7 +12,10 @@
   "plugins": [
     {
       "name": "codex-app-server-plugin",
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "sanghyun-io/codex-app-server-plugin"
+      },
       "description": "Integrates Codex App Server with Claude Code for stateful plan validation and code review",
       "version": "1.0.0",
       "author": { "name": "sanghyun-io" },
