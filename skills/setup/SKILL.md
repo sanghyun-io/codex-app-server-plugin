@@ -1,8 +1,8 @@
 ---
-name: codex-setup
+name: setup
 description: Setup and verify Codex App Server Plugin. Checks Node.js, codex CLI, authentication, and installed files. Run after plugin installation.
 invocation:
-  command: codex-setup
+  command: setup
   user_invocable: true
 ---
 

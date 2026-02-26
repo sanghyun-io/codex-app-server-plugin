@@ -1,9 +1,9 @@
 ---
-name: codex-review
+name: code-review
 description: Start a multi-round iterative code review using Codex App Server (gpt-5.3-codex). Tracks issues across rounds until convergence. Reviews current branch vs default branch by default.
 argument-hint: "[PR#N | --base <ref>] [--with-opus]"
 invocation:
-  command: codex-review
+  command: code-review
   user_invocable: true
 ---
 
