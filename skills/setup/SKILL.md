@@ -44,10 +44,13 @@ If cache files also don't exist, stop and report:
 
 ## Step 2: Check Node.js
 
-Try with Bash:
+Try with Bash — check version and path together:
 
 ```bash
-node --version 2>/dev/null || echo "NOT_FOUND"
+IS_WSL=$(uname -r 2>/dev/null | grep -qi microsoft && echo "YES" || echo "NO")
+NODE_PATH=$(which node 2>/dev/null || echo "NOT_FOUND")
+NODE_VER=$(node --version 2>/dev/null || echo "NOT_FOUND")
+echo "WSL=$IS_WSL PATH=$NODE_PATH VER=$NODE_VER"
 ```
 
 **If Bash is unavailable** (permission denied / don't ask mode):
@@ -56,21 +59,45 @@ node --version 2>/dev/null || echo "NOT_FOUND"
 
 **If NOT_FOUND**: Show "❌ Node.js is required (v18+). Install from https://nodejs.org" and stop.
 
-**If found**: Show "✓ Node.js {version}"
+**If WSL=YES and PATH starts with `/mnt/`**:
+- Show: "❌ WSL 환경에서 Windows에 설치된 Node.js가 감지됩니다 (`{PATH}`). WSL 내부에 Linux 네이티브 Node.js를 설치해야 합니다."
+- Guide:
+  ```
+  # nvm으로 설치 (권장)
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+  source ~/.bashrc
+  nvm install --lts
+
+  # 또는 apt로 설치
+  sudo apt update && sudo apt install nodejs npm
+  ```
+- Stop and wait.
+
+**If found with Linux-native path**: Show "✓ Node.js {version}"
 
 ---
 
 ## Step 3: Check codex CLI
 
-Try with Bash:
+Try with Bash — check path to detect Windows vs Linux install:
 
 ```bash
-codex --version 2>/dev/null || echo "NOT_FOUND"
+CODEX_PATH=$(which codex 2>/dev/null || echo "NOT_FOUND")
+CODEX_VER=$(codex --version 2>/dev/null || echo "NOT_FOUND")
+echo "PATH=$CODEX_PATH VER=$CODEX_VER"
 ```
 
 **If Bash is unavailable**:
-- Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `codex --version`"
+- Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `which codex` and confirm the path does not start with `/mnt/`"
 - Proceed to Step 4.
+
+**If PATH starts with `/mnt/`** (Windows 설치본이 WSL에서 실행됨):
+- Show: "❌ Windows에 설치된 codex가 감지됩니다 (`{PATH}`). WSL Linux 환경에서는 Linux 네이티브 codex가 필요합니다."
+- Guide:
+  ```
+  npm install -g @openai/codex@latest
+  ```
+- Stop and wait for user to reinstall, then re-run setup.
 
 **If NOT_FOUND**:
 Ask the user using AskUserQuestion:
@@ -82,7 +109,7 @@ Ask the user using AskUserQuestion:
     "header": "codex CLI",
     "multiSelect": false,
     "options": [
-      {"label": "지금 설치 (npm i -g @anthropic-ai/codex)", "description": "npm으로 codex CLI를 전역 설치합니다"},
+      {"label": "지금 설치 (npm install -g @openai/codex@latest)", "description": "현재 환경의 npm으로 Linux 네이티브 codex를 설치합니다"},
       {"label": "수동으로 설치하겠습니다", "description": "터미널에서 직접 설치 후 다시 실행합니다"},
       {"label": "건너뛰기", "description": "나중에 설치합니다 (플러그인 기능이 동작하지 않습니다)"}
     ]
@@ -90,9 +117,9 @@ Ask the user using AskUserQuestion:
 }
 ```
 
-If "지금 설치": Run `npm install -g @anthropic-ai/codex` then re-verify.
+If "지금 설치": Run `npm install -g @openai/codex@latest` then re-verify path and version.
 
-**If found**: Show "✓ codex CLI {version}"
+**If found with Linux-native path**: Show "✓ codex CLI {version}"
 
 ---
 
