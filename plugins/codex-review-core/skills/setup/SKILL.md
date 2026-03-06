@@ -12,33 +12,92 @@ Guide the user through verifying the complete plugin installation step by step.
 
 ---
 
-## Step 1: Check and Install Files
+## Step 1: Check and Update Files
 
-Use the **Read tool** (not Bash) to check file existence:
-- Read `~/.claude/bin/codex-review.mjs`
-- Read `~/.claude/rules/review-protocol.md`
+Use Bash to locate plugin cache files dynamically (version-independent):
 
-**If both exist**: Show "✓ Plugin files installed correctly" and proceed to Step 2.
+```bash
+CORE_BIN=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-core -name "codex-review.mjs" 2>/dev/null | head -1)
+RULES_DIR=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-rules -type d -name "rules" 2>/dev/null | head -1)
+echo "CORE_BIN=$CORE_BIN"
+echo "RULES_DIR=$RULES_DIR"
+```
 
-**If any file is missing**: Copy from plugin cache using Read + Write tools.
+**If Bash is unavailable** (permission denied / don't ask mode):
+- Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `ls ~/.claude/bin/codex-review.mjs ~/.claude/rules/review-protocol.md`"
+- Proceed to Step 2.
 
-Plugin cache source paths:
-- `~/.claude/plugins/cache/codex-app-server-plugin/bin/codex-review.mjs`
-- `~/.claude/plugins/cache/codex-app-server-plugin/rules/review-protocol.md`
-- `~/.claude/plugins/cache/codex-app-server-plugin/rules/codex-plan-validation.md`
-- `~/.claude/plugins/cache/codex-app-server-plugin/rules/codex-code-review.md`
+**If CORE_BIN or RULES_DIR is empty**: Stop and report:
+```
+Plugin cache not found. Please reinstall:
+  claude plugin install codex-review-core@sanghyun-io
+  claude plugin install codex-review-rules@sanghyun-io
+```
 
-Destination paths:
-- `~/.claude/bin/codex-review.mjs`
-- `~/.claude/rules/review-protocol.md`
-- `~/.claude/rules/codex-plan-validation.md`
-- `~/.claude/rules/codex-code-review.md`
+**Compare each file against cache using Bash**:
 
-Read each source file and Write to the destination. After copying show:
-"✓ Plugin files installed from cache"
+```bash
+INSTALLED_BIN="$HOME/.claude/bin/codex-review.mjs"
+INSTALLED_RULES="$HOME/.claude/rules"
 
-If cache files also don't exist, stop and report:
-"Plugin cache not found at ~/.claude/plugins/cache/codex-app-server-plugin/. Please reinstall: `claude plugin install codex-app-server-plugin@sanghyun-io`"
+# codex-review.mjs
+if [ ! -f "$INSTALLED_BIN" ]; then
+  echo "MISSING: codex-review.mjs"
+elif diff -q "$CORE_BIN" "$INSTALLED_BIN" > /dev/null 2>&1; then
+  echo "MATCH: codex-review.mjs"
+else
+  echo "DIFFER: codex-review.mjs"
+fi
+
+# rules files
+for name in review-protocol.md codex-plan-validation.md codex-code-review.md; do
+  dest="$INSTALLED_RULES/$name"
+  if [ ! -f "$dest" ]; then
+    echo "MISSING: $name"
+  elif diff -q "$RULES_DIR/$name" "$dest" > /dev/null 2>&1; then
+    echo "MATCH: $name"
+  else
+    echo "DIFFER: $name"
+  fi
+done
+```
+
+**결과별 처리**:
+
+| 상태 | 표시 | 처리 |
+|------|------|------|
+| MATCH | `✓ {filename} — 최신` | 넘어감 |
+| MISSING | `✗ {filename} — 미설치` | 즉시 캐시에서 복사 |
+| DIFFER | `⚠️ {filename} — 구버전 감지` | 아래 질문으로 처리 |
+
+DIFFER 파일이 하나라도 있으면 **AskUserQuestion**:
+
+```json
+{
+  "questions": [{
+    "question": "설치된 파일 중 캐시와 다른 버전이 감지되었습니다. 업데이트할까요?\n\n{DIFFER_LIST}",
+    "header": "파일 업데이트",
+    "multiSelect": false,
+    "options": [
+      {"label": "업데이트", "description": "캐시 버전으로 덮어씁니다"},
+      {"label": "건너뛰기", "description": "현재 설치된 파일을 유지합니다"}
+    ]
+  }]
+}
+```
+
+"업데이트" 또는 MISSING 파일 복사 시 — Bash로 설치:
+
+```bash
+mkdir -p ~/.claude/bin ~/.claude/rules
+cp "$CORE_BIN" ~/.claude/bin/codex-review.mjs && chmod +x ~/.claude/bin/codex-review.mjs
+cp "$RULES_DIR/review-protocol.md" ~/.claude/rules/
+cp "$RULES_DIR/codex-plan-validation.md" ~/.claude/rules/
+cp "$RULES_DIR/codex-code-review.md" ~/.claude/rules/
+echo "✓ Files installed/updated"
+```
+
+모든 파일이 MATCH이거나 업데이트 완료 시: "✓ Plugin files up to date" 표시 후 Step 2로 진행.
 
 ---
 
@@ -214,6 +273,6 @@ Show the final summary:
   • 코드 리뷰: /codex-app-server-plugin:code-review 를 실행하세요
   • 설정 재확인: /codex-app-server-plugin:setup
 
-모델: gpt-5.3-codex (Stateful Thread 방식)
+모델: gpt-5.4 (Stateful Thread 방식, --model 플래그로 오버라이드 가능)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
