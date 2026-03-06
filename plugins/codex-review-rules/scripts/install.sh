@@ -22,12 +22,11 @@ for rule_file in "$PLUGIN_ROOT/rules"/*.md; do
   if [ -f "$rule_file" ]; then
     filename=$(basename "$rule_file")
     if [ -f "$RULES_DIR/$filename" ]; then
-      echo -e "${YELLOW}⚠️  ${filename} already exists, skipping...${NC}"
-    else
-      cp "$rule_file" "$RULES_DIR/"
-      echo -e "✓ Installed ${GREEN}${filename}${NC}"
-      INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
+      echo -e "${YELLOW}⚠️  ${filename} already exists, overwriting...${NC}"
     fi
+    cp "$rule_file" "$RULES_DIR/"
+    echo -e "✓ Installed ${GREEN}${filename}${NC}"
+    INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
   fi
 done
 
