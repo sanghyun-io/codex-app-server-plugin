@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "sanghyun-io's Claude Code plugins",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "codex-review-core",
       "source": "./plugins/codex-review-core",
       "description": "Codex App Server wrapper for Claude Code — installs the codex-review CLI binary",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": { "name": "sanghyun-io" },
       "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
       "license": "MIT",
@@ -23,7 +23,7 @@
       "name": "codex-review-rules",
       "source": "./plugins/codex-review-rules",
       "description": "Optional rules for Codex-powered plan validation and code review workflows (requires codex-review-core)",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": { "name": "sanghyun-io" },
       "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
       "license": "MIT",
