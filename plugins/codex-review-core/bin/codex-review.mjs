@@ -375,7 +375,7 @@ async function cmdStart(promptFile, outputFile, sessionId, reviewDir, model) {
   }
 }
 
-async function cmdFollowUp(promptFile, outputFile, sessionId, reviewDir, model) {
+async function cmdFollowUp(promptFile, outputFile, sessionId, reviewDir, model, modelExplicit) {
   const state = loadState(reviewDir, sessionId);
   if (!state || !state.threadId) {
     throw new CodexError(4, `No active session found for ${sessionId}. Run 'start' first.`);
@@ -384,8 +384,8 @@ async function cmdFollowUp(promptFile, outputFile, sessionId, reviewDir, model) 
   const promptText = readFileSync(promptFile, "utf8");
   const client = new AppServerClient();
 
-  // Use model from state (recorded at start) unless overridden by caller
-  const effectiveModel = model !== MODEL ? model : (state.model || model);
+  // Use model from state (recorded at start) unless explicitly overridden by --model flag
+  const effectiveModel = modelExplicit ? model : (state.model || MODEL);
 
   try {
     await client.spawn();
@@ -480,7 +480,7 @@ function parseArgs(argv) {
   // Priority: CLI arg > env var > default constant
   const resolvedModel = model || process.env.CODEX_REVIEW_MODEL || MODEL;
 
-  return { command, positional, sessionId, reviewDir: resolve(reviewDir), model: resolvedModel };
+  return { command, positional, sessionId, reviewDir: resolve(reviewDir), model: resolvedModel, modelExplicit: model !== null };
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +488,7 @@ function parseArgs(argv) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const { command, positional, sessionId, reviewDir, model } = parseArgs(process.argv);
+  const { command, positional, sessionId, reviewDir, model, modelExplicit } = parseArgs(process.argv);
 
   try {
     switch (command) {
@@ -505,7 +505,7 @@ async function main() {
           console.error("Error: follow-up requires <prompt-file> <output-file>");
           process.exit(6);
         }
-        await cmdFollowUp(positional[0], positional[1], sessionId, reviewDir, model);
+        await cmdFollowUp(positional[0], positional[1], sessionId, reviewDir, model, modelExplicit);
         break;
       }
       case "close": {
