@@ -7,25 +7,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Codex App Server Plugin - Installation${NC}"
+echo -e "${BLUE}  codex-review-rules - Installation${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}"
 
-# 1. Install bin/codex-review.mjs → ~/.claude/bin/
-BIN_DIR="$HOME/.claude/bin"
-mkdir -p "$BIN_DIR"
-
-if [ -f "$BIN_DIR/codex-review.mjs" ]; then
-  echo -e "${YELLOW}⚠️  codex-review.mjs already exists, overwriting...${NC}"
-fi
-
-cp "$PLUGIN_ROOT/bin/codex-review.mjs" "$BIN_DIR/"
-chmod +x "$BIN_DIR/codex-review.mjs"
-echo -e "✓ Installed ${GREEN}~/.claude/bin/codex-review.mjs${NC}"
-
-# 2. Install rules → ~/.claude/rules/
+# Install rules → ~/.claude/rules/
 RULES_DIR="$HOME/.claude/rules"
 mkdir -p "$RULES_DIR"
 
@@ -54,5 +42,5 @@ echo "   @~/.claude/rules/review-protocol.md"
 echo "   @~/.claude/rules/codex-plan-validation.md"
 echo "   @~/.claude/rules/codex-code-review.md"
 echo ""
-echo -e "${BLUE}📚 Next: Run /codex-app-server-plugin:setup to verify prerequisites${NC}"
+echo -e "${BLUE}📚 Next: Run /codex-review-rules:code-review to start a review session${NC}"
 echo ""
