@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/install.sh",
-            "description": "Install codex-review binary and rules to ~/.claude/"
+            "description": "Install codex-review rules to ~/.claude/rules/"
           }
         ]
       }
