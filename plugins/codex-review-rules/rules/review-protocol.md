@@ -17,6 +17,7 @@
 | Thread 모델 | Stateful — Thread 내에서 follow-up Turn으로 반복 리뷰 가능 |
 | 인증 | ChatGPT 관리형 OAuth (`codex login`으로 사전 인증 필요) |
 | Fallback | 없음 — 실패 시 즉시 PASS |
+| 모델 오버라이드 | `--model <MODEL>` CLI 플래그 또는 `CODEX_REVIEW_MODEL` 환경변수 (기본값: `gpt-5.4`) |
 
 > **App Server 사용 이유**:
 > - Thread 영속성으로 follow-up 시 diff만 전송 → 토큰 ~52% 절감

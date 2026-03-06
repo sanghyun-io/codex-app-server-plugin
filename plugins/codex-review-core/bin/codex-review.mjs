@@ -4,8 +4,8 @@
  * codex-review — Codex App Server wrapper for stateful review loops
  *
  * Commands:
- *   start      <prompt-file> <output-file> --session <SID> --review-dir <DIR>
- *   follow-up  <prompt-file> <output-file> --session <SID> --review-dir <DIR>
+ *   start      <prompt-file> <output-file> --session <SID> --review-dir <DIR> [--model <MODEL>]
+ *   follow-up  <prompt-file> <output-file> --session <SID> --review-dir <DIR> [--model <MODEL>]
  *   close      --session <SID> --review-dir <DIR>
  *
  * Exit codes:
@@ -29,7 +29,7 @@ import { resolve } from "node:path";
 
 const TURN_TIMEOUT_MS = 300_000; // 5 minutes
 const INIT_TIMEOUT_MS = 30_000; // 30 seconds
-const MODEL = "gpt-5.3-codex";
+const MODEL = "gpt-5.4";
 
 // ---------------------------------------------------------------------------
 // AppServerClient
@@ -334,7 +334,7 @@ function deleteState(reviewDir, sessionId) {
 // CLI Command Handlers
 // ---------------------------------------------------------------------------
 
-async function cmdStart(promptFile, outputFile, sessionId, reviewDir) {
+async function cmdStart(promptFile, outputFile, sessionId, reviewDir, model) {
   const promptText = readFileSync(promptFile, "utf8");
   const client = new AppServerClient();
 
@@ -344,25 +344,25 @@ async function cmdStart(promptFile, outputFile, sessionId, reviewDir) {
     const account = await client.checkAuth();
     log(`Auth: ${account.type} / ${account.planType} / ${account.email}`);
 
-    const threadResult = await client.startThread({ model: MODEL });
+    const threadResult = await client.startThread({ model });
     const threadId = threadResult.thread.id;
-    log(`Thread created: ${threadId}`);
+    log(`Thread created: ${threadId} (model: ${model})`);
 
     // Save state immediately (before turn, in case of rate limit)
     saveState(reviewDir, sessionId, {
       threadId,
-      model: MODEL,
+      model,
       createdAt: new Date().toISOString(),
       turnCount: 0,
     });
 
-    const turnResult = await client.startTurn(threadId, promptText);
+    const turnResult = await client.startTurn(threadId, promptText, { model });
     log(`Turn completed: ${turnResult.status} (${turnResult.text.length} chars)`);
 
     // Update state with turn count
     saveState(reviewDir, sessionId, {
       threadId,
-      model: MODEL,
+      model,
       createdAt: new Date().toISOString(),
       turnCount: 1,
     });
@@ -375,7 +375,7 @@ async function cmdStart(promptFile, outputFile, sessionId, reviewDir) {
   }
 }
 
-async function cmdFollowUp(promptFile, outputFile, sessionId, reviewDir) {
+async function cmdFollowUp(promptFile, outputFile, sessionId, reviewDir, model, modelExplicit) {
   const state = loadState(reviewDir, sessionId);
   if (!state || !state.threadId) {
     throw new CodexError(4, `No active session found for ${sessionId}. Run 'start' first.`);
@@ -384,15 +384,18 @@ async function cmdFollowUp(promptFile, outputFile, sessionId, reviewDir) {
   const promptText = readFileSync(promptFile, "utf8");
   const client = new AppServerClient();
 
+  // Use model from state (recorded at start) unless explicitly overridden by --model flag
+  const effectiveModel = modelExplicit ? model : (state.model || MODEL);
+
   try {
     await client.spawn();
     await client.initialize();
     await client.checkAuth();
 
     await client.resumeThread(state.threadId);
-    log(`Thread resumed: ${state.threadId}`);
+    log(`Thread resumed: ${state.threadId} (model: ${effectiveModel})`);
 
-    const turnResult = await client.startTurn(state.threadId, promptText);
+    const turnResult = await client.startTurn(state.threadId, promptText, { model: effectiveModel });
     log(`Turn completed: ${turnResult.status} (${turnResult.text.length} chars)`);
 
     // Update state
@@ -422,9 +425,12 @@ function log(msg) {
 
 function printHelp() {
   console.log(`Usage:
-  codex-review start      <prompt-file> <output-file> --session <SID> --review-dir <DIR>
-  codex-review follow-up  <prompt-file> <output-file> --session <SID> --review-dir <DIR>
+  codex-review start      <prompt-file> <output-file> --session <SID> --review-dir <DIR> [--model <MODEL>]
+  codex-review follow-up  <prompt-file> <output-file> --session <SID> --review-dir <DIR> [--model <MODEL>]
   codex-review close      --session <SID> --review-dir <DIR>
+
+Options:
+  --model <MODEL>   Model to use (default: gpt-5.4, env: CODEX_REVIEW_MODEL)
 
 Exit codes:
   0 = success
@@ -447,6 +453,7 @@ function parseArgs(argv) {
 
   let sessionId = null;
   let reviewDir = null;
+  let model = null;
   const positional = [];
 
   for (let i = 1; i < args.length; i++) {
@@ -454,6 +461,8 @@ function parseArgs(argv) {
       sessionId = args[++i];
     } else if (args[i] === "--review-dir" && args[i + 1]) {
       reviewDir = args[++i];
+    } else if (args[i] === "--model" && args[i + 1]) {
+      model = args[++i];
     } else if (!args[i].startsWith("--")) {
       positional.push(args[i]);
     }
@@ -468,7 +477,10 @@ function parseArgs(argv) {
     process.exit(6);
   }
 
-  return { command, positional, sessionId, reviewDir: resolve(reviewDir) };
+  // Priority: CLI arg > env var > default constant
+  const resolvedModel = model || process.env.CODEX_REVIEW_MODEL || MODEL;
+
+  return { command, positional, sessionId, reviewDir: resolve(reviewDir), model: resolvedModel, modelExplicit: model !== null };
 }
 
 // ---------------------------------------------------------------------------
@@ -476,7 +488,7 @@ function parseArgs(argv) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const { command, positional, sessionId, reviewDir } = parseArgs(process.argv);
+  const { command, positional, sessionId, reviewDir, model, modelExplicit } = parseArgs(process.argv);
 
   try {
     switch (command) {
@@ -485,7 +497,7 @@ async function main() {
           console.error("Error: start requires <prompt-file> <output-file>");
           process.exit(6);
         }
-        await cmdStart(positional[0], positional[1], sessionId, reviewDir);
+        await cmdStart(positional[0], positional[1], sessionId, reviewDir, model);
         break;
       }
       case "follow-up": {
@@ -493,7 +505,7 @@ async function main() {
           console.error("Error: follow-up requires <prompt-file> <output-file>");
           process.exit(6);
         }
-        await cmdFollowUp(positional[0], positional[1], sessionId, reviewDir);
+        await cmdFollowUp(positional[0], positional[1], sessionId, reviewDir, model, modelExplicit);
         break;
       }
       case "close": {
