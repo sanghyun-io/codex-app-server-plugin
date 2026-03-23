@@ -18,6 +18,8 @@
 | 인증 | ChatGPT 관리형 OAuth (`codex login`으로 사전 인증 필요) |
 | Fallback | 없음 — 실패 시 즉시 PASS |
 | 모델 오버라이드 | `--model <MODEL>` CLI 플래그 또는 `CODEX_REVIEW_MODEL` 환경변수 (기본값: `gpt-5.4`) |
+| 타임아웃 오버라이드 | `--timeout <MS>` CLI 플래그 또는 `CODEX_REVIEW_TIMEOUT` 환경변수 (기본값: `1800000` / 30분) |
+| 실행 모드 | **비동기** (백그라운드 워커) — `start`/`follow-up`은 즉시 반환, `status`로 폴링 |
 
 > **App Server 사용 이유**:
 > - Thread 영속성으로 follow-up 시 diff만 전송 → 토큰 ~52% 절감
@@ -81,6 +83,9 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 | Phase 1.5 | follow-up 프롬프트 | `{REVIEW_DIR}/review_{SID}_fu{N}_prompt.txt` |
 | Phase 1.5 | follow-up 출력 | `{REVIEW_DIR}/review_{SID}_fu{N}_output.txt` |
 | Thread | 상태 파일 | `{REVIEW_DIR}/review_{SID}_state.json` |
+| Worker | 진행 상황 | `{REVIEW_DIR}/review_{SID}_progress.json` |
+| Worker | PID 파일 | `{REVIEW_DIR}/review_{SID}_pid` |
+| Worker | 로그 파일 | `{REVIEW_DIR}/review_{SID}_worker.log` |
 
 **코드 리뷰용** (`codex-code-review.md`):
 
@@ -245,29 +250,90 @@ GPT-5.3에게 플랜을 전달한다.
 
 > **⛔ 필수**: 이 단계를 건너뛰고 프롬프트를 인라인으로 전달하는 것을 금지한다.
 
-#### Step 2: codex-review start 실행
+#### Step 2: codex-review start 실행 (비동기)
 
-`codex-review.mjs`의 `start` 명령으로 새 Thread를 생성하고 초기 리뷰를 실행한다.
+`codex-review.mjs` v2의 `start` 명령은 **백그라운드 워커를 spawn하고 즉시 반환**한다.
 `{HOME_LITERAL}`은 세션 초기화 Step A에서 확인한 리터럴 경로로 치환한다:
 
 ```bash
 node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/review_{SID}_p1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/review_{SID}_p1_output.txt" --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
 ```
 
-> **핵심**:
-> - 프롬프트 파일과 출력 파일을 **positional 인자**로 전달 (stdin/stdout 파이프 사용하지 않음)
-> - wrapper가 직접 파일을 읽고 쓰므로 인코딩 문제 없음
+> **핵심 (v2 변경사항)**:
+> - `start` 명령은 **즉시 반환** (exit 0). 실제 Codex 호출은 백그라운드 워커가 처리
+> - 워커는 진행 상황을 `review_{SID}_progress.json`에 3초 간격으로 기록
+> - 결과 확인은 **Step 3 (폴링)**으로 진행
 > - `--session`과 `--review-dir`는 필수 인자
 > - `; echo "EXIT_CODE: $?"`로 exit code 확인 (반드시 `;`로 분리)
 >
 > **⛔ `$HOME` 직접 사용 금지**: Bash 도구 호출마다 `$HOME`이 빈 문자열로 확장될 수 있다.
 > 반드시 세션 초기화에서 확인한 `{HOME_LITERAL}` 리터럴 경로를 사용한다.
 
-#### Step 3: 결과 수집
+#### Step 3: 진행 상황 폴링 (status)
 
-Read 도구로 `{HOME}/.claude/tmp/review_{SID}_p1_output.txt` 읽기.
+`start`가 exit 0을 반환하면, **30초 간격**으로 `status` 명령을 호출하여 진행 상황을 확인한다:
 
-exit code가 0이 아닌 경우 → 에러 처리 섹션 참조.
+```bash
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
+```
+
+`status` 명령은 JSON을 stdout으로 출력하고, 상태에 따라 exit code를 반환한다:
+
+| Exit Code | 상태 | 처리 |
+|:---------:|------|------|
+| 0 | `completed` | **Step 4로 진행** — 출력 파일 읽기 |
+| 7 | `running` / `initializing` / `queued` | **30초 후 재폴링** (아래 사용자 알림 임계치 참조) |
+| 5 | `timeout_partial` | 부분 출력 저장됨 — 출력 파일 읽기 후 Phase 2 진행 |
+| 8 | `cancelled` | 취소됨 — 부분 출력이 있으면 읽기 |
+| 6 | `crashed` / `failed` | 에러 처리 섹션 참조 |
+| 1-4 | 기타 에러 | 에러 처리 섹션 참조 |
+
+**status JSON 형식**:
+```json
+{
+  "status": "running",
+  "startedAt": "2026-03-23T...",
+  "elapsedMs": 45000,
+  "charsReceived": 3200,
+  "pid": 12345,
+  "pidAlive": true
+}
+```
+
+**사용자 알림 임계치**: status에서 `elapsedMs`가 **120초(2분)**를 초과하고 아직 `running`이면,
+**AskUserQuestion**으로 사용자에게 상황을 보고하고 결정을 받는다:
+
+```json
+{
+  "questions": [{
+    "question": "Codex 리뷰가 {elapsed}초째 진행 중입니다 (현재 {charsReceived}자 수신). 어떻게 할까요?",
+    "header": "Review Progress",
+    "multiSelect": false,
+    "options": [
+      {"label": "계속 대기", "description": "리뷰가 완료될 때까지 기다립니다 (30초 후 다시 확인)"},
+      {"label": "취소 후 부분 결과 사용", "description": "현재까지 수신된 내용으로 진행합니다"},
+      {"label": "PASS", "description": "리뷰를 건너뛰고 다음 단계로 진행합니다"}
+    ]
+  }]
+}
+```
+
+> **"계속 대기" 선택 시**: 30초 후 다시 status를 확인한다. 이후 **60초마다** 재알림한다.
+> **"취소 후 부분 결과 사용" 선택 시**: `cancel` 명령 실행 → 부분 출력 파일 읽기 → Phase 2 진행.
+> **"PASS" 선택 시**: `cancel` 명령 실행 → 검증 스킵.
+
+**취소 명령**:
+```bash
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" cancel --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
+```
+
+#### Step 4: 결과 수집
+
+status exit 0 (completed) 반환 후, Read 도구로 출력 파일 읽기:
+
+`{HOME}/.claude/tmp/review_{SID}_p1_output.txt`
+
+exit code가 에러인 경우 → 에러 처리 섹션 참조.
 
 ---
 
@@ -301,16 +367,23 @@ Write 도구로 follow-up 프롬프트를 파일에 저장한다:
 > **⛔ 전체 Plan 재전송 금지**: follow-up에서는 diff만 전송한다.
 > Thread가 이전 Turn의 전체 Plan을 기억하고 있으므로, 변경된 부분만 보내면 된다.
 
-#### Step 2: codex-review follow-up 실행
+#### Step 2: codex-review follow-up 실행 (비동기)
 
 ```bash
 node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up "{HOME_LITERAL}/.claude/tmp/review_{SID}_fu{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/review_{SID}_fu{N}_output.txt" --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
 ```
 
 > **동작 원리**: `follow-up` 명령은 state 파일에서 threadId를 읽어 기존 Thread를 resume한 뒤,
-> 새 Turn을 생성하여 follow-up 프롬프트를 전달한다.
+> 백그라운드 워커로 새 Turn을 생성한다. **즉시 반환** (exit 0).
 
-#### Step 3: 결과 수집
+#### Step 3: 진행 상황 폴링 (status)
+
+Phase 1 Step 3과 **동일한 폴링 패턴**을 사용한다:
+- 30초 간격으로 `status` 명령 호출
+- 2분 초과 시 AskUserQuestion으로 사용자 알림
+- 완료 시 출력 파일 읽기
+
+#### Step 4: 결과 수집
 
 Read 도구로 `{HOME}/.claude/tmp/review_{SID}_fu{N}_output.txt` 읽기.
 
@@ -650,29 +723,56 @@ After all issues, provide:
 
 #### codex-review Exit Code 처리
 
-`codex-review.mjs`는 다음 exit code를 반환한다:
+`codex-review.mjs` v2는 다음 exit code를 반환한다:
+
+**`start` / `follow-up` 명령** (비동기 — 즉시 반환):
 
 | Exit Code | 의미 | 처리 |
 |:---------:|------|------|
-| 0 | 성공 | 정상 진행 — 출력 파일 읽기 |
-| 1 | codex 바이너리 없음 | 즉시 PASS (검증 종료) |
-| 2 | 인증 실패 | 즉시 PASS — 사용자에게 `codex login` 안내 |
-| 3 | Rate limit | 즉시 PASS (검증 종료) |
-| 4 | Thread resume 실패 | follow-up에서만 발생 — `start`로 새 Thread 생성 후 재시도 |
-| 5 | Turn timeout (300초) | 즉시 PASS |
-| 6 | 프로세스 오류 | 1회 재시도 후 PASS |
+| 0 | 워커 spawn 성공 | `status`로 폴링 시작 |
+| 4 | Thread resume 실패 | `start`로 새 Thread 생성 후 재시도 |
+| 6 | 프로세스 오류 (프롬프트 파일 없음 등) | 1회 재시도 후 PASS |
 
-#### 에러 처리 흐름
+**`status` 명령** (폴링):
+
+| Exit Code | 의미 | 처리 |
+|:---------:|------|------|
+| 0 | 완료 (`completed`) | 출력 파일 읽기 → Phase 2 진행 |
+| 7 | 실행 중 (`running` / `initializing` / `queued`) | 30초 후 재폴링 (2분 초과 시 사용자 알림) |
+| 5 | 타임아웃 (`timeout_partial`, 30분 safety net) | 부분 출력 읽기 → Phase 2 진행 |
+| 8 | 취소됨 (`cancelled`) | 부분 출력이 있으면 읽기 |
+| 1 | codex 바이너리 없음 | 즉시 PASS |
+| 2 | 인증 실패 | 즉시 PASS — 사용자에게 `codex login` 안내 |
+| 3 | Rate limit | 즉시 PASS |
+| 6 | 워커 crash / 프로세스 오류 | 1회 재시도 후 PASS |
+
+**`cancel` 명령**:
+
+| Exit Code | 의미 | 처리 |
+|:---------:|------|------|
+| 0 | 취소 완료 | 부분 출력 파일이 있으면 읽기 |
+
+#### 에러 처리 흐름 (비동기)
 
 ```
-codex-review 실행
-  ├─ exit 0 → 출력 파일 읽기 → Phase 2 진행
-  ├─ exit 1 → PASS (codex 미설치)
-  ├─ exit 2 → PASS (인증 실패, "codex login 필요" 안내)
-  ├─ exit 3 → PASS (rate limit)
-  ├─ exit 4 → start로 재시도 (Thread 손상)
-  ├─ exit 5 → PASS (timeout)
-  └─ exit 6 → 1회 재시도 → 재실패 시 PASS
+codex-review start → exit 0 (워커 시작됨)
+  │
+  ├─ status 폴링 루프 (30초 간격)
+  │   ├─ exit 7 → 실행 중 → 계속 대기 (2분 초과 시 사용자 알림)
+  │   ├─ exit 0 → 완료 → 출력 파일 읽기 → Phase 2
+  │   ├─ exit 5 → 타임아웃 → 부분 출력 읽기 → Phase 2
+  │   ├─ exit 8 → 취소됨 → 부분 출력 있으면 읽기
+  │   ├─ exit 1 → PASS (codex 미설치)
+  │   ├─ exit 2 → PASS (인증 실패)
+  │   ├─ exit 3 → PASS (rate limit)
+  │   └─ exit 6 → PASS (워커 crash)
+  │
+  ├─ 사용자 "취소" 선택 시
+  │   └─ codex-review cancel → 부분 출력 사용 또는 PASS
+  │
+  └─ start 자체 에러 시
+      ├─ exit 4 → start로 재시도 (Thread 손상)
+      └─ exit 6 → 1회 재시도 → 재실패 시 PASS
 ```
 
 > **PASS 의미**: 검증을 건너뛰고 다음 단계로 진행한다.
@@ -688,4 +788,4 @@ codex-review 실행
 
 ---
 
-*Last modified*: 2026-02-26
+*Last modified*: 2026-03-23
