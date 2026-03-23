@@ -62,9 +62,9 @@ Plan 작성 완료 후 **AskUserQuestion**으로 확인:
 사용자가 "검증 실행"을 선택한 경우:
 
 1. **컨텍스트 수집** (재읽기 금지 — 현재 컨텍스트 활용)
-2. **review-protocol.md Phase 0(자동 감지) → Phase 1 실행** (`codex-review start`)
+2. **review-protocol.md Phase 1 실행** (`codex-review start` → `status` 폴링 → 결과 수집)
 3. **Phase 2 종합본으로 Pass/Fail 판정**
-4. **NEEDS_REVISION이면 Phase 1.5로 follow-up 재검증** (`codex-review follow-up`, 동일 Thread 재사용)
+4. **NEEDS_REVISION이면 Phase 1.5로 follow-up 재검증** (`codex-review follow-up` → `status` 폴링, 동일 Thread 재사용)
 
 ---
 
@@ -247,4 +247,4 @@ Phase 2 종합본의 **최종 Verdict** 기준으로 판정:
 ---
 
 *Related*: `plan-structure.md`, `review-protocol.md`, `codex-code-review.md`, `rule-format.md`
-*Last modified*: 2026-02-26
+*Last modified*: 2026-03-23
