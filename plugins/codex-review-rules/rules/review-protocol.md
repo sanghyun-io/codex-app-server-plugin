@@ -57,9 +57,8 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 > 모든 출력 파일에 `{SID}`를 반드시 포함한다.
 >
 > **⛔ Windows 경로 규칙**:
-> - Write 도구: `{HOME}/.claude/tmp/cr_{SID}_*.txt` (절대 경로, `{HOME}`은 런타임에 해석)
 > - Bash/Git Bash: **`{HOME_LITERAL}/.claude/tmp/cr_{SID}_*.txt`** (리터럴 경로 사용)
-> - **절대로 `/tmp/`를 사용하지 않는다** (Windows에서 Write 도구와 Git Bash의 /tmp/ 경로가 불일치)
+> - **절대로 `/tmp/`를 사용하지 않는다** (Windows에서 Git Bash의 /tmp/ 경로가 시스템과 불일치)
 > - **절대로 Bash 도구에서 `$HOME`을 직접 사용하지 않는다** (확장 실패 가능성)
 
 #### 파일 규칙
@@ -69,9 +68,11 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 
 **파일이 필요한 이유**:
 - Git Bash 파이프 경유 시 한글 인코딩 깨짐 방지
-- Bash 도구 30000자 truncation 방지
 - **동시 세션 간 파일 충돌 방지**
 - 프롬프트 이력 보존 (디버깅 및 재실행 용이)
+
+> **`--stdin` 모드**: 프롬프트를 heredoc으로 CLI에 전달하면 CLI가 내부적으로 파일을 작성한다.
+> Write 도구 호출이 불필요하므로 **사용자 인가 없이** 프롬프트 파일이 생성된다.
 
 **파일 네이밍 규칙** (코드 리뷰):
 
@@ -86,7 +87,7 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 | Worker 로그 | `{REVIEW_DIR}/cr_{SID}_worker.log` |
 
 > `{SID}`는 세션 ID, `{REVIEW_DIR}`은 `{HOME_LITERAL}/.claude/tmp`으로 치환한다 (`{HOME_LITERAL}`은 세션 초기화에서 확인한 리터럴 경로).
-> Write 도구 사용 시에는 `{HOME}/.claude/tmp/cr_{SID}_*.txt` 형태의 절대 경로를 사용한다.
+> 프롬프트 파일은 `--stdin` 플래그를 사용하여 CLI가 직접 작성한다 (Write 도구 불필요).
 
 ---
 
@@ -111,36 +112,33 @@ Engineering standards for this review:
 `codex-review start` 명령으로 새 Thread를 생성하고 첫 Turn을 전송한다.
 프롬프트는 아래 **Code Review Prompt Template**의 플레이스홀더를 치환하여 사용한다.
 
-#### Step 1: 프롬프트 파일 생성 (필수)
+#### Step 1: 프롬프트 전달 + codex-review start 실행 (단일 Bash 호출)
 
-**반드시** Write 도구로 프롬프트를 파일에 저장한다:
+`--stdin` 플래그를 사용하여 **프롬프트를 heredoc으로 전달**한다.
+CLI가 내부적으로 프롬프트 파일을 작성하므로 Write 도구 호출이 필요 없다.
 
-- 파일 경로: `{REVIEW_DIR}/cr_{SID}_r1_prompt.txt`
-  - Write 도구: `{HOME}/.claude/tmp/cr_{SID}_r1_prompt.txt`
-- 내용: Code Review Prompt Template의 플레이스홀더 치환 완료본
-
-> **⛔ 필수**: 이 단계를 건너뛰고 프롬프트를 인라인으로 전달하는 것을 금지한다.
-
-#### Step 2: codex-review start 실행 (비동기)
-
-`codex-review.mjs` v2의 `start` 명령은 **백그라운드 워커를 spawn하고 즉시 반환**한다.
+Code Review Prompt Template의 플레이스홀더를 치환한 완료본을 heredoc 본문으로 넣는다.
 `{HOME_LITERAL}`은 세션 초기화 Step A에서 확인한 리터럴 경로로 치환한다:
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_output.txt" --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start --stdin "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_output.txt" --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" <<'PROMPT_EOF'
+{치환 완료된 프롬프트 전문}
+PROMPT_EOF
+echo "EXIT_CODE: $?"
 ```
 
-> **핵심 (v2 변경사항)**:
+> **핵심**:
+> - `--stdin`으로 프롬프트를 stdin에서 읽어 `<prompt-file>`에 자동 저장 → **Write 도구 인가 불필요**
 > - `start` 명령은 **즉시 반환** (exit 0). 실제 Codex 호출은 백그라운드 워커가 처리
 > - 워커는 진행 상황을 `cr_{SID}_progress.json`에 3초 간격으로 기록
-> - 결과 확인은 **Step 3 (폴링)**으로 진행
+> - 결과 확인은 **Step 2 (폴링)**으로 진행
 > - `--session`과 `--review-dir`는 필수 인자
-> - `; echo "EXIT_CODE: $?"`로 exit code 확인 (반드시 `;`로 분리)
+> - heredoc 종료 후 `echo "EXIT_CODE: $?"`로 exit code 확인
 >
 > **⛔ `$HOME` 직접 사용 금지**: Bash 도구 호출마다 `$HOME`이 빈 문자열로 확장될 수 있다.
 > 반드시 세션 초기화에서 확인한 `{HOME_LITERAL}` 리터럴 경로를 사용한다.
 
-#### Step 3: 진행 상황 폴링 (status)
+#### Step 2: 진행 상황 폴링 (status)
 
 `start`가 exit 0을 반환하면, **30초 간격**으로 `status` 명령을 호출하여 진행 상황을 확인한다:
 
@@ -152,9 +150,9 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 
 | Exit Code | 상태 | 처리 |
 |:---------:|------|------|
-| 0 | `completed` | **Step 4로 진행** — 출력 파일 읽기 |
+| 0 | `completed` | **Step 3으로 진행** — 출력 파일 읽기 |
 | 7 | `running` / `initializing` / `queued` | **30초 후 재폴링** (아래 사용자 알림 임계치 참조) |
-| 5 | `timeout_partial` | 부분 출력 저장됨 — Step 4로 진행 (출력 파일 읽기) |
+| 5 | `timeout_partial` | 부분 출력 저장됨 — Step 3으로 진행 (출력 파일 읽기) |
 | 8 | `cancelled` | 취소됨 — 부분 출력이 있으면 읽기 |
 | 6 | `crashed` / `failed` | 에러 처리 섹션 참조 |
 | 1-4 | 기타 에러 | 에러 처리 섹션 참조 |
@@ -198,7 +196,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" cancel --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
 ```
 
-#### Step 4: 결과 수집
+#### Step 3: 결과 수집
 
 status exit 0 (completed) 반환 후, Read 도구로 출력 파일 읽기:
 
@@ -218,13 +216,9 @@ Round 2+ 증분 리뷰 시 사용한다.
 - Round 1 완료 후 사용자가 이슈를 수정하고 Round 2+로 진입할 때
 - Round N에서 다음 Round N+1로 진행할 때
 
-#### Step 1: Follow-up 프롬프트 파일 생성
+#### Step 1: 프롬프트 전달 + codex-review follow-up 실행 (단일 Bash 호출)
 
-Write 도구로 follow-up 프롬프트를 파일에 저장한다:
-
-- 파일 경로: `{REVIEW_DIR}/cr_{SID}_r{N}_prompt.txt` (N = 라운드 번호, 2부터)
-  - Write 도구: `{HOME}/.claude/tmp/cr_{SID}_r{N}_prompt.txt`
-- 내용: **Code Review Prompt Template**의 플레이스홀더를 치환한 완료본 (증분 diff + 히스토리 포함)
+PHASE 1과 동일하게 `--stdin` heredoc으로 프롬프트를 전달한다.
 
 **Follow-up 컨텐츠 구성 규칙**:
 
@@ -238,23 +232,25 @@ Write 도구로 follow-up 프롬프트를 파일에 저장한다:
 > **⛔ 전체 diff 재전송 금지**: follow-up에서는 증분 diff만 전송한다.
 > Thread가 이전 Turn의 전체 컨텍스트를 기억하고 있으므로, 이번 라운드에서 변경된 부분만 보내면 된다.
 
-#### Step 2: codex-review follow-up 실행 (비동기)
-
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r{N}_output.txt" --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up --stdin "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r{N}_output.txt" --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" <<'PROMPT_EOF'
+{치환 완료된 follow-up 프롬프트 전문}
+PROMPT_EOF
+echo "EXIT_CODE: $?"
 ```
 
-> **동작 원리**: `follow-up` 명령은 state 파일에서 threadId를 읽어 기존 Thread를 resume한 뒤,
+> **동작 원리**: `follow-up --stdin`은 stdin에서 프롬프트를 읽어 파일에 저장한 뒤,
+> state 파일에서 threadId를 읽어 기존 Thread를 resume하고,
 > 백그라운드 워커로 새 Turn을 생성한다. **즉시 반환** (exit 0).
 
-#### Step 3: 진행 상황 폴링 (status)
+#### Step 2: 진행 상황 폴링 (status)
 
-PHASE 1 Step 3과 **동일한 폴링 패턴**을 사용한다:
+PHASE 1 Step 2와 **동일한 폴링 패턴**을 사용한다:
 - 30초 간격으로 `status` 명령 호출
 - 2분 초과 시 AskUserQuestion으로 사용자 알림
 - 완료 시 출력 파일 읽기
 
-#### Step 4: 결과 수집
+#### Step 3: 결과 수집
 
 Read 도구로 `{HOME}/.claude/tmp/cr_{SID}_r{N}_output.txt` 읽기.
 

@@ -14,6 +14,7 @@
  *   --model <MODEL>       Model override (default: gpt-5.4, env: CODEX_REVIEW_MODEL)
  *   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
  *   --foreground          Run synchronously (v1 compat, no background worker)
+ *   --stdin               Read prompt from stdin and write to <prompt-file> (avoids Write tool permission)
  *
  * Exit codes:
  *   0 = success / completed
@@ -706,6 +707,16 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => { data += chunk; });
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
@@ -925,6 +936,17 @@ async function cmdStart(parsed) {
     console.error("Error: start requires <prompt-file> <output-file>");
     process.exit(6);
   }
+  if (parsed.stdin) {
+    const promptFile = resolve(parsed.positional[0]);
+    const promptText = await readStdin();
+    if (!promptText.trim()) {
+      console.error("Error: empty prompt received from stdin");
+      process.exit(6);
+    }
+    mkdirSync(dirname(promptFile), { recursive: true });
+    writeFileSync(promptFile, promptText, "utf8");
+    log(`Prompt written from stdin (${promptText.length} chars) → ${promptFile}`);
+  }
   spawnWorker(parsed);
 }
 
@@ -943,6 +965,18 @@ async function cmdFollowUp(parsed) {
   if (!state?.threadId) {
     log(`No active session found for ${parsed.sessionId}. Run 'start' first.`);
     process.exit(4);
+  }
+
+  if (parsed.stdin) {
+    const promptFile = resolve(parsed.positional[0]);
+    const promptText = await readStdin();
+    if (!promptText.trim()) {
+      console.error("Error: empty prompt received from stdin");
+      process.exit(6);
+    }
+    mkdirSync(dirname(promptFile), { recursive: true });
+    writeFileSync(promptFile, promptText, "utf8");
+    log(`Prompt written from stdin (${promptText.length} chars) → ${promptFile}`);
   }
 
   spawnWorker(parsed);
@@ -1236,6 +1270,7 @@ Options:
   --model <MODEL>       Model to use (default: gpt-5.4, env: CODEX_REVIEW_MODEL)
   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
   --foreground          Run synchronously (v1 compat)
+  --stdin               Read prompt from stdin, write to <prompt-file>
 
 Exit codes:
   0 = success / completed
@@ -1272,6 +1307,7 @@ function parseArgs(argv) {
   let timeout = null;
   let nonce = null;
   let foreground = false;
+  let stdin = false;
   const positional = [];
 
   for (let i = 1; i < raw.length; i++) {
@@ -1287,6 +1323,8 @@ function parseArgs(argv) {
       nonce = raw[++i];
     } else if (raw[i] === "--foreground") {
       foreground = true;
+    } else if (raw[i] === "--stdin") {
+      stdin = true;
     } else if (!raw[i].startsWith("--")) {
       positional.push(raw[i]);
     }
@@ -1304,6 +1342,7 @@ function parseArgs(argv) {
       timeout: DEFAULT_HARD_TIMEOUT_MS,
       nonce,
       foreground,
+      stdin,
       isWorker,
     };
   }
@@ -1334,6 +1373,7 @@ function parseArgs(argv) {
     timeout: resolvedTimeout,
     nonce,
     foreground,
+    stdin,
     isWorker,
   };
 }
