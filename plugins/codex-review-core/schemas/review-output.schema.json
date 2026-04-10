@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Codex Review Output",
-  "description": "Structured output schema for plan validation and code review results. Enables machine-readable parsing for automated follow-up actions.",
+  "description": "Structured output schema for code review results. Enables machine-readable parsing for automated follow-up actions.",
   "type": "object",
   "required": ["verdict", "summary", "findings"],
   "additionalProperties": false,
