@@ -5,3 +5,7 @@ Thumbs.db
 # Temp
 *.log
 *.tmp
+tmp-review*/
+
+# Claude Code local workspace
+.claude/
