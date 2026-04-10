@@ -6,7 +6,43 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/install.sh",
-            "description": "Install codex-review binary to ~/.claude/bin/"
+            "description": "Install codex-review binary, schemas, and hook scripts to ~/.claude/"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/session-lifecycle.mjs start",
+            "timeout": 5000,
+            "description": "Export session metadata for worker coordination"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/session-lifecycle.mjs end",
+            "timeout": 10000,
+            "description": "Kill running workers, shut down broker, clean up temp files"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/stop-gate.mjs",
+            "timeout": 30000,
+            "description": "Quality gate: check for active reviews and uncommitted changes before stopping"
           }
         ]
       }

@@ -25,6 +25,35 @@ cp "$PLUGIN_ROOT/bin/codex-review.mjs" "$BIN_DIR/"
 chmod +x "$BIN_DIR/codex-review.mjs"
 echo -e "✓ Installed ${GREEN}~/.claude/bin/codex-review.mjs${NC}"
 
+# Install bin/broker.mjs → ~/.claude/bin/
+if [ -f "$PLUGIN_ROOT/bin/broker.mjs" ]; then
+  cp "$PLUGIN_ROOT/bin/broker.mjs" "$BIN_DIR/"
+  chmod +x "$BIN_DIR/broker.mjs"
+  echo -e "✓ Installed ${GREEN}~/.claude/bin/broker.mjs${NC}"
+fi
+
+# Install schemas → ~/.claude/schemas/
+SCHEMA_DIR="$HOME/.claude/schemas"
+mkdir -p "$SCHEMA_DIR"
+if [ -d "$PLUGIN_ROOT/schemas" ]; then
+  for schema_file in "$PLUGIN_ROOT/schemas"/*.json; do
+    if [ -f "$schema_file" ]; then
+      filename=$(basename "$schema_file")
+      cp "$schema_file" "$SCHEMA_DIR/"
+      echo -e "✓ Installed ${GREEN}~/.claude/schemas/${filename}${NC}"
+    fi
+  done
+fi
+
+# Install scripts → ~/.claude/bin/ (lifecycle hooks)
+for script_file in session-lifecycle.mjs stop-gate.mjs; do
+  if [ -f "$PLUGIN_ROOT/scripts/$script_file" ]; then
+    cp "$PLUGIN_ROOT/scripts/$script_file" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/$script_file"
+    echo -e "✓ Installed ${GREEN}~/.claude/bin/${script_file}${NC}"
+  fi
+done
+
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}✓ Installation complete!${NC}"

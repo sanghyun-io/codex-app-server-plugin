@@ -11,7 +11,7 @@ import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, rmSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(__dirname, "../bin/codex-review.mjs");
 const FAKE_DIR = __dirname;
-const PATH_WITH_FAKE = `${FAKE_DIR}:${process.env.PATH}`;
+const FAKE_CODEX = resolve(FAKE_DIR, "fake-codex.mjs");
 const TEST_DIR = resolve(__dirname, ".test-tmp");
 
 let sessionCounter = 0;
@@ -28,7 +28,8 @@ function newSid() { return `test_${Date.now()}_${++sessionCounter}`; }
 function cli(args, opts = {}) {
   const env = {
     ...process.env,
-    PATH: PATH_WITH_FAKE,
+    CODEX_BINARY: FAKE_CODEX,
+    CODEX_REVIEW_NO_BROKER: "1",
     FAKE_TURN_DELAY_MS: String(opts.turnDelay ?? 100),
     FAKE_TURN_TEXT: opts.turnText ?? "Test output.\n\n[VERDICT] - APPROVE",
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -51,8 +52,6 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ---- Setup ----
 
 before(() => {
-  const link = resolve(FAKE_DIR, "codex");
-  if (!existsSync(link)) symlinkSync(resolve(FAKE_DIR, "fake-codex.sh"), link);
   mkdirSync(TEST_DIR, { recursive: true });
 });
 
