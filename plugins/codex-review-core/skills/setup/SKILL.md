@@ -17,9 +17,9 @@ Guide the user through verifying the complete plugin installation step by step.
 Use Bash to locate plugin cache files dynamically (version-independent):
 
 ```bash
-CORE_BIN=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-core -name "codex-review.mjs" 2>/dev/null | head -1)
+CORE_ROOT=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-core -type d -name "bin" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
 RULES_DIR=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-rules -type d -name "rules" 2>/dev/null | head -1)
-echo "CORE_BIN=$CORE_BIN"
+echo "CORE_ROOT=$CORE_ROOT"
 echo "RULES_DIR=$RULES_DIR"
 ```
 
@@ -27,7 +27,7 @@ echo "RULES_DIR=$RULES_DIR"
 - Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `ls ~/.claude/bin/codex-review.mjs ~/.claude/rules/review-protocol.md`"
 - Proceed to Step 2.
 
-**If CORE_BIN or RULES_DIR is empty**: Stop and report:
+**If CORE_ROOT or RULES_DIR is empty**: Stop and report:
 ```
 Plugin cache not found. Please reinstall:
   claude plugin install codex-review-core@sanghyun-io
@@ -37,17 +37,51 @@ Plugin cache not found. Please reinstall:
 **Compare each file against cache using Bash**:
 
 ```bash
-INSTALLED_BIN="$HOME/.claude/bin/codex-review.mjs"
+INSTALLED_BIN_DIR="$HOME/.claude/bin"
+INSTALLED_SCHEMA_DIR="$HOME/.claude/schemas"
 INSTALLED_RULES="$HOME/.claude/rules"
 
-# codex-review.mjs
-if [ ! -f "$INSTALLED_BIN" ]; then
-  echo "MISSING: codex-review.mjs"
-elif diff -q "$CORE_BIN" "$INSTALLED_BIN" > /dev/null 2>&1; then
-  echo "MATCH: codex-review.mjs"
-else
-  echo "DIFFER: codex-review.mjs"
-fi
+# core bin files
+for name in codex-review.mjs broker.mjs; do
+  src="$CORE_ROOT/bin/$name"
+  dest="$INSTALLED_BIN_DIR/$name"
+  [ -f "$src" ] || continue
+  if [ ! -f "$dest" ]; then
+    echo "MISSING: $name"
+  elif diff -q "$src" "$dest" > /dev/null 2>&1; then
+    echo "MATCH: $name"
+  else
+    echo "DIFFER: $name"
+  fi
+done
+
+# lifecycle scripts
+for name in session-lifecycle.mjs stop-gate.mjs; do
+  src="$CORE_ROOT/scripts/$name"
+  dest="$INSTALLED_BIN_DIR/$name"
+  [ -f "$src" ] || continue
+  if [ ! -f "$dest" ]; then
+    echo "MISSING: $name"
+  elif diff -q "$src" "$dest" > /dev/null 2>&1; then
+    echo "MATCH: $name"
+  else
+    echo "DIFFER: $name"
+  fi
+done
+
+# schemas
+for name in review-output.schema.json; do
+  src="$CORE_ROOT/schemas/$name"
+  dest="$INSTALLED_SCHEMA_DIR/$name"
+  [ -f "$src" ] || continue
+  if [ ! -f "$dest" ]; then
+    echo "MISSING: $name"
+  elif diff -q "$src" "$dest" > /dev/null 2>&1; then
+    echo "MATCH: $name"
+  else
+    echo "DIFFER: $name"
+  fi
+done
 
 # rules files
 for name in review-protocol.md codex-plan-validation.md codex-code-review.md; do
@@ -89,11 +123,25 @@ DIFFER 파일이 하나라도 있으면 **AskUserQuestion**:
 "업데이트" 또는 MISSING 파일 복사 시 — Bash로 설치:
 
 ```bash
-mkdir -p ~/.claude/bin ~/.claude/rules
-cp "$CORE_BIN" ~/.claude/bin/codex-review.mjs && chmod +x ~/.claude/bin/codex-review.mjs
+mkdir -p ~/.claude/bin ~/.claude/schemas ~/.claude/rules
+
+# core bin files
+cp "$CORE_ROOT/bin/codex-review.mjs" ~/.claude/bin/ && chmod +x ~/.claude/bin/codex-review.mjs
+[ -f "$CORE_ROOT/bin/broker.mjs" ] && cp "$CORE_ROOT/bin/broker.mjs" ~/.claude/bin/ && chmod +x ~/.claude/bin/broker.mjs
+
+# lifecycle scripts
+for name in session-lifecycle.mjs stop-gate.mjs; do
+  [ -f "$CORE_ROOT/scripts/$name" ] && cp "$CORE_ROOT/scripts/$name" ~/.claude/bin/ && chmod +x ~/.claude/bin/$name
+done
+
+# schemas
+[ -f "$CORE_ROOT/schemas/review-output.schema.json" ] && cp "$CORE_ROOT/schemas/review-output.schema.json" ~/.claude/schemas/
+
+# rules
 cp "$RULES_DIR/review-protocol.md" ~/.claude/rules/
 cp "$RULES_DIR/codex-plan-validation.md" ~/.claude/rules/
 cp "$RULES_DIR/codex-code-review.md" ~/.claude/rules/
+
 echo "✓ Files installed/updated"
 ```
 
@@ -207,7 +255,7 @@ Show and stop:
 
   BROWSER=/bin/false codex login
 
-완료 후 /codex-app-server-plugin:setup 을 다시 실행하세요.
+완료 후 /codex-review-core:setup 을 다시 실행하세요.
 ```
 
 **If "이미 로그인했습니다"**: Proceed to Step 5.
@@ -264,15 +312,20 @@ Show the final summary:
 
 설치된 항목:
   ✓ ~/.claude/bin/codex-review.mjs
+  ✓ ~/.claude/bin/broker.mjs
+  ✓ ~/.claude/bin/session-lifecycle.mjs
+  ✓ ~/.claude/bin/stop-gate.mjs
+  ✓ ~/.claude/schemas/review-output.schema.json
   ✓ ~/.claude/rules/review-protocol.md
   ✓ ~/.claude/rules/codex-plan-validation.md
   ✓ ~/.claude/rules/codex-code-review.md
 
 사용 방법:
   • Plan 검증: Plan 작성 완료 후 Claude가 자동으로 제안합니다
-  • 코드 리뷰: /codex-app-server-plugin:code-review 를 실행하세요
-  • 설정 재확인: /codex-app-server-plugin:setup
+  • 코드 리뷰: /codex-review-rules:code-review 를 실행하세요
+  • 설정 재확인: /codex-review-core:setup
 
 모델: gpt-5.4 (Stateful Thread 방식, --model 플래그로 오버라이드 가능)
+브로커: 기본 활성화 (CODEX_REVIEW_NO_BROKER=1 로 비활성화 가능)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
