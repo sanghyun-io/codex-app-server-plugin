@@ -3,9 +3,11 @@ rule_type: workflow
 applies_to:
   - "Code review requests"
   - "/code-review command"
+  - "Codex에게 리뷰/검토 부탁/요청"
+  - "Codex로 코드 리뷰/검토"
 triggers:
   - event: "code_review"
-    description: "사용자가 코드 리뷰를 명시적으로 요청하거나 /code-review 실행 시"
+    description: "사용자가 코드 리뷰를 명시적으로 요청하거나 /code-review 실행 시, 또는 'Codex에게 리뷰 부탁' 같은 자연어 트리거 시"
 ---
 
 # Code Review Protocol (Codex + Opus)
