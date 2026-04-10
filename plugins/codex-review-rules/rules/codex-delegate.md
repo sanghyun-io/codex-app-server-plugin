@@ -72,25 +72,23 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 
 ## Turn 1: 초기 프롬프트
 
-### Step 1: 프롬프트 파일 작성
+### Step 1: 프롬프트 전달 + codex-review start 실행
 
-Write 도구로 파일 작성:
-- 경로: `{HOME}/.claude/tmp/dg_{SID}_t1_prompt.txt`
-- 내용: 아래 **Delegate Prompt Template**의 플레이스홀더 치환본
-
-### Step 2: codex-review start 실행
-
-review-protocol.md의 **PHASE 1 Step 2**를 따르되 세션 이름은 `dg_{SID}`:
+`--stdin` heredoc으로 프롬프트를 전달한다 (Write 도구 불필요).
+세션 이름은 `dg_{SID}`:
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t1_output.txt" --session "dg_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start --stdin "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t1_output.txt" --session "dg_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" <<'PROMPT_EOF'
+{치환 완료된 프롬프트 전문}
+PROMPT_EOF
+echo "EXIT_CODE: $?"
 ```
 
-### Step 3: 폴링
+### Step 2: 폴링
 
-review-protocol.md의 **PHASE 1 Step 3**과 동일 (status → 30초 간격, 2분 초과 시 AskUserQuestion).
+review-protocol.md의 **PHASE 1 Step 2**와 동일 (status → 30초 간격, 2분 초과 시 AskUserQuestion).
 
-### Step 4: 결과 수집 및 해석
+### Step 3: 결과 수집 및 해석
 
 `dg_{SID}_t1_output.txt` 읽기. Codex 응답은 다음 중 한 형식으로 온다:
 
@@ -117,21 +115,20 @@ review-protocol.md의 **PHASE 1 Step 3**과 동일 (status → 30초 간격, 2�
 | Observations | 예상과 다른 결과, 에러, 추가로 발견한 문제 |
 | Blockers | Codex 판단이 필요한 불확실한 부분 |
 
-### Step 2: Follow-up 프롬프트 작성
+### Step 2: 프롬프트 전달 + codex-review follow-up 실행
 
-Write 도구:
-- 경로: `{HOME}/.claude/tmp/dg_{SID}_t{N}_prompt.txt`
-- 내용: **Delegate Follow-up Template** (증분 정보만)
+`--stdin` heredoc으로 follow-up 프롬프트를 전달한다:
+
+```bash
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up --stdin "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t{N}_output.txt" --session "dg_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" <<'PROMPT_EOF'
+{치환 완료된 follow-up 프롬프트 전문}
+PROMPT_EOF
+echo "EXIT_CODE: $?"
+```
 
 > **⛔ 금지**: 이전 Turn의 프롬프트/컨텍스트 재전송. Thread가 기억하고 있다.
 
-### Step 3: codex-review follow-up 실행
-
-```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/dg_{SID}_t{N}_output.txt" --session "dg_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
-```
-
-### Step 4: 폴링 + 결과 처리
+### Step 3: 폴링 + 결과 처리
 
 Turn 1과 동일. Codex 응답을 해석하여 다음 행동을 결정한다.
 
