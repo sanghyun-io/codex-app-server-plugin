@@ -119,16 +119,20 @@ Installs review workflow rules that instruct Claude to automatically offer itera
 | `codex-session-ops.md` | `~/.claude/rules/` | Session list / cancel / readout |
 | `codex-delegation.md` | `~/.claude/rules/` | Natural language intent router |
 
-After installation, add to your `~/.claude/CLAUDE.md`:
+Rules are **auto-activated** during installation: the install script appends a marked block to `~/.claude/CLAUDE.md`:
 
 ```
+<!-- @codex-review-rules:begin -->
 @~/.claude/rules/review-protocol.md
 @~/.claude/rules/codex-delegation.md
 @~/.claude/rules/codex-code-review.md
 @~/.claude/rules/codex-red-review.md
 @~/.claude/rules/codex-delegate.md
 @~/.claude/rules/codex-session-ops.md
+<!-- @codex-review-rules:end -->
 ```
+
+The original `CLAUDE.md` is backed up to `CLAUDE.md.bak`. Re-running the installer is idempotent (the block is skipped if the begin marker is already present). To deactivate, remove the block manually.
 
 ### Skills
 
