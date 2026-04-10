@@ -22,12 +22,12 @@
     {
       "name": "codex-review-rules",
       "source": "./plugins/codex-review-rules",
-      "description": "Optional rules for Codex-powered plan validation and code review workflows (requires codex-review-core)",
+      "description": "Optional rules for Codex-powered iterative code review workflows (requires codex-review-core)",
       "version": "1.2.0",
       "author": { "name": "sanghyun-io" },
       "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
       "license": "MIT",
-      "keywords": ["codex", "code-review", "plan-validation", "rules", "claude-code"]
+      "keywords": ["codex", "code-review", "rules", "claude-code"]
     }
   ]
 }

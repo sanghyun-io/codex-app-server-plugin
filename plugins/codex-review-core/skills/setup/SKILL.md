@@ -84,7 +84,7 @@ for name in review-output.schema.json; do
 done
 
 # rules files
-for name in review-protocol.md codex-plan-validation.md codex-code-review.md; do
+for name in review-protocol.md codex-code-review.md; do
   dest="$INSTALLED_RULES/$name"
   if [ ! -f "$dest" ]; then
     echo "MISSING: $name"
@@ -139,7 +139,6 @@ done
 
 # rules
 cp "$RULES_DIR/review-protocol.md" ~/.claude/rules/
-cp "$RULES_DIR/codex-plan-validation.md" ~/.claude/rules/
 cp "$RULES_DIR/codex-code-review.md" ~/.claude/rules/
 
 echo "✓ Files installed/updated"
@@ -275,7 +274,7 @@ Ask the user using AskUserQuestion:
 ```json
 {
   "questions": [{
-    "question": "rules 파일이 CLAUDE.md에 import되어 있지 않습니다. Plan 검증 및 코드 리뷰 자동화 기능을 사용하려면 import가 필요합니다.",
+    "question": "rules 파일이 CLAUDE.md에 import되어 있지 않습니다. 코드 리뷰 자동화 기능을 사용하려면 import가 필요합니다.",
     "header": "CLAUDE.md",
     "multiSelect": false,
     "options": [
@@ -288,16 +287,15 @@ Ask the user using AskUserQuestion:
 ```
 
 **If "자동으로 추가해주세요"**:
-Append these 3 lines to `~/.claude/CLAUDE.md` using the Edit tool:
+Append these 2 lines to `~/.claude/CLAUDE.md` using the Edit tool:
 ```
 @~/.claude/rules/review-protocol.md
-@~/.claude/rules/codex-plan-validation.md
 @~/.claude/rules/codex-code-review.md
 ```
 Show: "✓ CLAUDE.md에 rules import를 추가했습니다"
 
 **If "직접 추가하겠습니다"**:
-Show the 3 lines above.
+Show the 2 lines above.
 
 ---
 
@@ -317,11 +315,9 @@ Show the final summary:
   ✓ ~/.claude/bin/stop-gate.mjs
   ✓ ~/.claude/schemas/review-output.schema.json
   ✓ ~/.claude/rules/review-protocol.md
-  ✓ ~/.claude/rules/codex-plan-validation.md
   ✓ ~/.claude/rules/codex-code-review.md
 
 사용 방법:
-  • Plan 검증: Plan 작성 완료 후 Claude가 자동으로 제안합니다
   • 코드 리뷰: /codex-review-rules:code-review 를 실행하세요
   • 설정 재확인: /codex-review-core:setup
 

@@ -10,22 +10,7 @@ triggers:
 
 # Code Review Protocol (Codex + Opus)
 
-코드 리뷰 전용 워크플로. Plan 검증(`codex-plan-validation.md`)과 분리된 반복 코드 리뷰 프로토콜.
-
-모든 모델 호출은 `review-protocol.md`의 실행 규칙을 따른다 (`codex-review` CLI wrapper → App Server).
-
----
-
-## Plan 검증과의 차이
-
-| | Plan 검증 (`codex-plan-validation.md`) | 코드 리뷰 (이 문서) |
-|---|---|---|
-| **대상** | Plan 문서 (마크다운) | git diff (코드) |
-| **반복** | 최대 3회 | 수렴까지 (제한 없음) |
-| **증분 diff** | follow-up 시 diff만 전송 (Thread 컨텍스트 활용) | Round 2+부터 증분만 |
-| **히스토리** | Thread가 관리 (App Server) | 있음 (이전 이슈/결정 누적) |
-| **Opus 교차검증** | 없음 | 선택사항 |
-| **트리거** | `plan_created` (자동 제안) | 사용자 명시적 요청 |
+반복 코드 리뷰 워크플로. 모든 모델 호출은 `review-protocol.md`의 실행 규칙을 따른다 (`codex-review` CLI wrapper → App Server).
 
 ---
 
@@ -104,7 +89,7 @@ review-protocol.md의 실행 규칙을 따른다. v2에서는 **비동기 실행
 
 ### Step 4: 결과 처리
 
-review-protocol.md PHASE 2의 이슈 통합 + 사용자 상호작용 절차를 따른다.
+review-protocol.md PHASE 3의 이슈 통합 + 사용자 상호작용 절차를 따른다.
 
 - HIGH 이슈: AskUserQuestion으로 사용자 결정
 - MED/LOW 이슈: 권고사항으로 리포트
@@ -135,7 +120,7 @@ review-protocol.md의 **리뷰 히스토리** 섹션을 따른다.
 `{REVIEW_HISTORY}` 플레이스홀더에 이전 라운드 요약을 삽입:
 - 이전 이슈 목록 (번호, 심각도, 한줄 요약, 해결 여부)
 - Deferred 목록 + "DO NOT re-flag these" 지시
-- 최대 2000자
+- 전체 히스토리 누적 (라운드 수 제한 없음)
 
 ### Step 3: 후반 라운드 지시 (Round 3+)
 
@@ -216,7 +201,7 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 - **리뷰 모드**: {BIG CHANGE / SMALL CHANGE}
 
 ## 심사 모델
-- GPT-5.3 Codex: {라운드별 verdict 요약}
+- Codex (gpt-5.4): {라운드별 verdict 요약}
 - Opus 교차검증: ✅ / ⏭️ SKIP (사유)
 
 ---
@@ -247,7 +232,7 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 
 | 모델 | 최종 라운드 |
 |---|---|
-| GPT-5.3 Codex | APPROVE / REVISE |
+| Codex (gpt-5.4) | APPROVE / REVISE |
 | Opus (선택) | APPROVE / REVISE |
 | **종합** | **APPROVE / REVISE** |
 ```
@@ -276,7 +261,7 @@ review-protocol.md v2의 비동기 실행 규칙을 적용한다:
 | Worker PID | `{REVIEW_DIR}/cr_{SID}_pid` |
 | Worker 로그 | `{REVIEW_DIR}/cr_{SID}_worker.log` |
 
-> `review_{SID}_*`는 Plan 검증 전용. 코드 리뷰는 `cr_{SID}_*` 패턴을 사용한다.
+> 코드 리뷰는 `cr_{SID}_*` 패턴을 사용한다.
 
 ### 세션 ID 및 디렉토리
 
@@ -301,11 +286,10 @@ review-protocol.md의 세션 초기화 규칙을 그대로 따른다 (Step A: HO
 - ❌ 매 라운드 전체 diff 재전송 (Round 2+에서는 반드시 증분 diff)
 - ❌ 이전 라운드 이슈/결정을 무시 (히스토리 필수 포함)
 - ❌ Deferred 이슈를 다시 지적
-- ❌ Plan 검증 프로토콜로 코드 리뷰 실행 (이 문서의 워크플로 사용)
 - ❌ 사용자 확인 없이 Opus 교차검증 자동 실행
 - ❌ 수렴 조건 미달 시 임의 종료
 
 ---
 
-*Related*: `review-protocol.md`, `codex-plan-validation.md`, `rule-format.md`
-*Last modified*: 2026-03-23
+*Related*: `review-protocol.md`, `rule-format.md`
+*Last modified*: 2026-04-10

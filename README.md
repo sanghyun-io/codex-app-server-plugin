@@ -1,6 +1,6 @@
 # codex-app-server-plugin
 
-A Claude Code plugin monorepo that integrates the **Codex App Server** with Claude Code, enabling stateful multi-round plan validation and iterative code review using **gpt-5.4** (or any configurable model).
+A Claude Code plugin monorepo that integrates the **Codex App Server** with Claude Code, enabling stateful multi-round iterative code review using **gpt-5.4** (or any configurable model).
 
 ## Plugins
 
@@ -9,7 +9,7 @@ This repo contains two independent plugins. Install only what you need:
 | Plugin | Purpose | Required |
 |--------|---------|:--------:|
 | **codex-review-core** | Codex App Server CLI wrapper (`codex-review.mjs`) | ✅ |
-| **codex-review-rules** | Review workflow rules for plan validation and code review | Optional |
+| **codex-review-rules** | Review workflow rules for iterative code review | Optional |
 
 ## How It Works
 
@@ -104,7 +104,7 @@ Installs the `codex-review.mjs` CLI binary, the broker, lifecycle scripts, and t
 
 ## Plugin: codex-review-rules (Optional)
 
-Installs review workflow rules that instruct Claude to automatically offer plan validation and iterative code review using Codex.
+Installs review workflow rules that instruct Claude to automatically offer iterative code review using Codex.
 
 > **Requires** `codex-review-core` to be installed first.
 
@@ -113,14 +113,12 @@ Installs review workflow rules that instruct Claude to automatically offer plan 
 | File | Location | Purpose |
 |------|----------|---------|
 | `review-protocol.md` | `~/.claude/rules/` | Core review protocol |
-| `codex-plan-validation.md` | `~/.claude/rules/` | Plan validation workflow |
 | `codex-code-review.md` | `~/.claude/rules/` | Code review workflow |
 
 After installation, add to your `~/.claude/CLAUDE.md`:
 
 ```
 @~/.claude/rules/review-protocol.md
-@~/.claude/rules/codex-plan-validation.md
 @~/.claude/rules/codex-code-review.md
 ```
 
@@ -129,16 +127,6 @@ After installation, add to your `~/.claude/CLAUDE.md`:
 | Skill | Invocation | Description |
 |-------|-----------|-------------|
 | Code Review | `/codex-review-rules:code-review` | Start iterative code review |
-
-### Plan Validation
-
-After finishing a plan in Plan mode, Claude automatically offers validation:
-
-```
-Plan 작성이 완료되었습니다. Multi-Model Debate로 유효성 검증을 실행할까요?
-  ▶ 검증 실행
-    스킵
-```
 
 ### Code Review
 

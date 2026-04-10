@@ -1,12 +1,13 @@
-## Plan Review Protocol (GPT-5.3 Codex)
+## Codex Review Execution Protocol
 
-플랜 검증 요청 시 아래 프로토콜을 반드시 따를 것.
+Codex를 이용한 리뷰 실행 시 아래 프로토콜을 반드시 따를 것.
+이 문서는 `codex-code-review.md`가 공통으로 참조하는 실행 인프라(세션 관리, CLI 호출, 폴링, 결과 처리 골격)를 정의한다.
 
 ### Provider 구성
 
 | 모델 | Provider | 호출 방식 |
 |------|----------|-----------|
-| GPT-5.3 Codex | OpenAI (App Server) | `codex-review` CLI wrapper (`~/.claude/bin/codex-review.mjs`) |
+| gpt-5.4 (기본) | OpenAI (App Server) | `codex-review` CLI wrapper (`~/.claude/bin/codex-review.mjs`) |
 
 #### 호출 방식
 
@@ -56,8 +57,8 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 > 모든 출력 파일에 `{SID}`를 반드시 포함한다.
 >
 > **⛔ Windows 경로 규칙**:
-> - Write 도구: `{HOME}/.claude/tmp/review_{SID}_*.txt` (절대 경로, `{HOME}`은 런타임에 해석)
-> - Bash/Git Bash: **`{HOME_LITERAL}/.claude/tmp/review_{SID}_*.txt`** (리터럴 경로 사용)
+> - Write 도구: `{HOME}/.claude/tmp/cr_{SID}_*.txt` (절대 경로, `{HOME}`은 런타임에 해석)
+> - Bash/Git Bash: **`{HOME_LITERAL}/.claude/tmp/cr_{SID}_*.txt`** (리터럴 경로 사용)
 > - **절대로 `/tmp/`를 사용하지 않는다** (Windows에서 Write 도구와 Git Bash의 /tmp/ 경로가 불일치)
 > - **절대로 Bash 도구에서 `$HOME`을 직접 사용하지 않는다** (확장 실패 가능성)
 
@@ -72,22 +73,7 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 - **동시 세션 간 파일 충돌 방지**
 - 프롬프트 이력 보존 (디버깅 및 재실행 용이)
 
-**파일 네이밍 규칙**:
-
-**Plan 검증용** (`codex-plan-validation.md`):
-
-| Phase | 종류 | 파일 경로 |
-|-------|------|-----------|
-| Phase 1 | 프롬프트 입력 | `{REVIEW_DIR}/review_{SID}_p1_prompt.txt` |
-| Phase 1 | 모델 출력 | `{REVIEW_DIR}/review_{SID}_p1_output.txt` |
-| Phase 1.5 | follow-up 프롬프트 | `{REVIEW_DIR}/review_{SID}_fu{N}_prompt.txt` |
-| Phase 1.5 | follow-up 출력 | `{REVIEW_DIR}/review_{SID}_fu{N}_output.txt` |
-| Thread | 상태 파일 | `{REVIEW_DIR}/review_{SID}_state.json` |
-| Worker | 진행 상황 | `{REVIEW_DIR}/review_{SID}_progress.json` |
-| Worker | PID 파일 | `{REVIEW_DIR}/review_{SID}_pid` |
-| Worker | 로그 파일 | `{REVIEW_DIR}/review_{SID}_worker.log` |
-
-**코드 리뷰용** (`codex-code-review.md`):
+**파일 네이밍 규칙** (코드 리뷰):
 
 | 종류 | 파일 경로 |
 |------|-----------|
@@ -95,9 +81,12 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 | Round N 출력 | `{REVIEW_DIR}/cr_{SID}_r{N}_output.txt` |
 | 리뷰 히스토리 | `{REVIEW_DIR}/cr_{SID}_history.md` |
 | Thread 상태 | `{REVIEW_DIR}/cr_{SID}_state.json` |
+| Worker 진행 상황 | `{REVIEW_DIR}/cr_{SID}_progress.json` |
+| Worker PID | `{REVIEW_DIR}/cr_{SID}_pid` |
+| Worker 로그 | `{REVIEW_DIR}/cr_{SID}_worker.log` |
 
 > `{SID}`는 세션 ID, `{REVIEW_DIR}`은 `{HOME_LITERAL}/.claude/tmp`으로 치환한다 (`{HOME_LITERAL}`은 세션 초기화에서 확인한 리터럴 경로).
-> Write 도구 사용 시에는 `{HOME}/.claude/tmp/review_{SID}_*.txt` 형태의 절대 경로를 사용한다.
+> Write 도구 사용 시에는 `{HOME}/.claude/tmp/cr_{SID}_*.txt` 형태의 절대 경로를 사용한다.
 
 ---
 
@@ -117,136 +106,18 @@ Engineering standards for this review:
 
 ---
 
-### Review Prompt Template (Phase 1)
-
-아래 프롬프트를 GPT-5.3에게 전달한다.
-`{PLAN_CONTENT}`, `{PROJECT_CONTEXT}` 를 치환한다.
-
-```
-Review the following implementation plan critically as a senior engineer.
-
-## Engineering Standards
-- DRY: Flag repetition only when it causes real maintenance problems.
-- Edge cases: Thorough coverage over speed. Handle more, not fewer.
-- Engineering balance: Not under-engineered (fragile) nor over-engineered (unnecessary complexity).
-- Explicit over clever.
-- Well-tested: Focus on critical paths and edge cases.
-- Report issues only if they represent real problems — "no issue" is a valid finding.
-
-## Review Guidelines
-- Report only real issues — if an area has no problems, report none.
-- Up to 4 issues per review area (max 16 total). Prioritize by actual impact.
-
-## Review Areas
-
-### Area 1: Architecture & Design
-- System design and component boundaries
-- Dependency graph and coupling concerns
-- Data flow patterns and potential bottlenecks
-- Scaling characteristics and single points of failure
-- Security architecture (auth, data access, API boundaries)
-
-### Area 2: Implementation Quality
-- Plan completeness and logical structure
-- DRY violations — only when it causes real maintenance problems
-- Error handling patterns and missing edge cases (call out explicitly)
-- Technical debt hotspots
-- Over-engineered or under-engineered areas
-
-### Area 3: Test Strategy
-- Test coverage gaps (unit, integration, e2e)
-- Test quality and assertion strength considerations
-- Missing edge case coverage
-- Untested failure modes and error paths
-
-### Area 4: Performance & Scalability
-- N+1 queries and database access patterns
-- Memory-usage concerns
-- Caching opportunities
-- Slow or high-complexity code paths
-
-## Output Format
-
-For EACH issue found, use this exact format:
-
-### [#N] [HIGH/MED/LOW] [Area X] Issue title
-**Problem**:
-- **What**: What is wrong.
-- **Why**: Root cause — why this is a problem.
-- **Impact**: Actual harm or risk if left unaddressed.
-
-**Options**:
-- **(A) {recommended action}**: Description. Effort: X. Risk: X. Impact: X.
-- **(B) {alternative}**: Description. Effort: X. Risk: X. Impact: X.
-- **(C) Do nothing**: Rationale. (Only if severity != HIGH)
-
-**Recommendation**: (A/B/C) — Reasoning mapped to engineering standards above.
-
----
-
-After all issues, provide:
-
-[VERDICT] - APPROVE / REVISE / REJECT with summary reasoning.
-
-## Plan to Review:
-
-{PLAN_CONTENT}
-
-## Project Context:
-
-{PROJECT_CONTEXT}
-```
-
----
-
-### Follow-up Review Prompt Template (Phase 1.5)
-
-NEEDS_REVISION 후 수정된 Plan을 재검증할 때 사용한다.
-동일 Thread 내에서 follow-up Turn으로 전송하므로 모델이 이전 리뷰 컨텍스트를 기억한다.
-
-```
-I've made changes to address issues from the previous review.
-
-## Issues Addressed
-{ADDRESSED_ISSUES}
-
-## Issues NOT Addressed (user decision)
-{SKIPPED_ISSUES}
-
-## Changes Made (diff)
-{PLAN_DIFF}
-
-## Re-review Instructions
-1. Verify that each addressed issue is properly fixed
-2. Check if the fixes introduced new issues
-3. Do NOT re-report previously skipped issues
-4. Focus review on changed areas only
-5. Use the same output format as the initial review
-6. Provide updated [VERDICT]: APPROVE / REVISE / REJECT
-```
-
-**플레이스홀더 설명**:
-
-| Placeholder | Source | 설명 |
-|-------------|--------|------|
-| `{ADDRESSED_ISSUES}` | Phase 2 사용자 결정 | 수정하기로 한 이슈 목록 (번호, 제목, 선택 옵션) |
-| `{SKIPPED_ISSUES}` | Phase 2 사용자 결정 | Skip/Deferred한 이슈 목록 + 사유 |
-| `{PLAN_DIFF}` | Plan 수정 전후 diff | 변경된 부분만 포함 (전체 Plan 재전송 금지) |
-
----
-
 ### PHASE 1: 초기 리뷰 (codex-review start)
 
-GPT-5.3에게 플랜을 전달한다.
-위 **Review Prompt Template**의 `{REVIEW_MODE}`, `{PLAN_CONTENT}`, `{PROJECT_CONTEXT}`를 치환하여 전달한다.
+`codex-review start` 명령으로 새 Thread를 생성하고 첫 Turn을 전송한다.
+프롬프트는 아래 **Code Review Prompt Template**의 플레이스홀더를 치환하여 사용한다.
 
 #### Step 1: 프롬프트 파일 생성 (필수)
 
 **반드시** Write 도구로 프롬프트를 파일에 저장한다:
 
-- 파일 경로: `{REVIEW_DIR}/review_{SID}_p1_prompt.txt`
-  - Write 도구: `{HOME}/.claude/tmp/review_{SID}_p1_prompt.txt`
-- 내용: `{REVIEW_PROMPT_P1}` (플레이스홀더 치환 완료본)
+- 파일 경로: `{REVIEW_DIR}/cr_{SID}_r1_prompt.txt`
+  - Write 도구: `{HOME}/.claude/tmp/cr_{SID}_r1_prompt.txt`
+- 내용: Code Review Prompt Template의 플레이스홀더 치환 완료본
 
 > **⛔ 필수**: 이 단계를 건너뛰고 프롬프트를 인라인으로 전달하는 것을 금지한다.
 
@@ -256,12 +127,12 @@ GPT-5.3에게 플랜을 전달한다.
 `{HOME_LITERAL}`은 세션 초기화 Step A에서 확인한 리터럴 경로로 치환한다:
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/review_{SID}_p1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/review_{SID}_p1_output.txt" --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_output.txt" --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
 ```
 
 > **핵심 (v2 변경사항)**:
 > - `start` 명령은 **즉시 반환** (exit 0). 실제 Codex 호출은 백그라운드 워커가 처리
-> - 워커는 진행 상황을 `review_{SID}_progress.json`에 3초 간격으로 기록
+> - 워커는 진행 상황을 `cr_{SID}_progress.json`에 3초 간격으로 기록
 > - 결과 확인은 **Step 3 (폴링)**으로 진행
 > - `--session`과 `--review-dir`는 필수 인자
 > - `; echo "EXIT_CODE: $?"`로 exit code 확인 (반드시 `;`로 분리)
@@ -274,7 +145,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude
 `start`가 exit 0을 반환하면, **30초 간격**으로 `status` 명령을 호출하여 진행 상황을 확인한다:
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
 ```
 
 `status` 명령은 JSON을 stdout으로 출력하고, 상태에 따라 exit code를 반환한다:
@@ -283,7 +154,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "review_{SID
 |:---------:|------|------|
 | 0 | `completed` | **Step 4로 진행** — 출력 파일 읽기 |
 | 7 | `running` / `initializing` / `queued` | **30초 후 재폴링** (아래 사용자 알림 임계치 참조) |
-| 5 | `timeout_partial` | 부분 출력 저장됨 — 출력 파일 읽기 후 Phase 2 진행 |
+| 5 | `timeout_partial` | 부분 출력 저장됨 — Step 4로 진행 (출력 파일 읽기) |
 | 8 | `cancelled` | 취소됨 — 부분 출력이 있으면 읽기 |
 | 6 | `crashed` / `failed` | 에러 처리 섹션 참조 |
 | 1-4 | 기타 에러 | 에러 처리 섹션 참조 |
@@ -319,58 +190,58 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "review_{SID
 ```
 
 > **"계속 대기" 선택 시**: 30초 후 다시 status를 확인한다. 이후 **60초마다** 재알림한다.
-> **"취소 후 부분 결과 사용" 선택 시**: `cancel` 명령 실행 → 부분 출력 파일 읽기 → Phase 2 진행.
+> **"취소 후 부분 결과 사용" 선택 시**: `cancel` 명령 실행 → 부분 출력 파일 읽기 → PHASE 3 진행.
 > **"PASS" 선택 시**: `cancel` 명령 실행 → 검증 스킵.
 
 **취소 명령**:
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" cancel --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" cancel --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
 ```
 
 #### Step 4: 결과 수집
 
 status exit 0 (completed) 반환 후, Read 도구로 출력 파일 읽기:
 
-`{HOME}/.claude/tmp/review_{SID}_p1_output.txt`
+`{HOME}/.claude/tmp/cr_{SID}_r1_output.txt`
 
 exit code가 에러인 경우 → 에러 처리 섹션 참조.
 
 ---
 
-### PHASE 1.5: Follow-up 리뷰 (codex-review follow-up)
+### PHASE 2: Follow-up 리뷰 (codex-review follow-up)
 
-NEEDS_REVISION 후 Plan을 수정하고 재검증할 때 사용한다.
+Round 2+ 증분 리뷰 시 사용한다.
 **동일 Thread를 재사용**하므로 모델이 이전 리뷰 컨텍스트를 기억한다.
 
 #### 언제 실행하는가
 
-- Phase 2에서 NEEDS_REVISION 판정
-- 사용자가 "수정 후 재검증" 선택
-- Plan 수정 완료 후
+- Round 1 완료 후 사용자가 이슈를 수정하고 Round 2+로 진입할 때
+- Round N에서 다음 Round N+1로 진행할 때
 
 #### Step 1: Follow-up 프롬프트 파일 생성
 
 Write 도구로 follow-up 프롬프트를 파일에 저장한다:
 
-- 파일 경로: `{REVIEW_DIR}/review_{SID}_fu{N}_prompt.txt` (N = follow-up 회차, 1부터)
-  - Write 도구: `{HOME}/.claude/tmp/review_{SID}_fu{N}_prompt.txt`
-- 내용: **Follow-up Review Prompt Template**의 플레이스홀더를 치환한 완료본
+- 파일 경로: `{REVIEW_DIR}/cr_{SID}_r{N}_prompt.txt` (N = 라운드 번호, 2부터)
+  - Write 도구: `{HOME}/.claude/tmp/cr_{SID}_r{N}_prompt.txt`
+- 내용: **Code Review Prompt Template**의 플레이스홀더를 치환한 완료본 (증분 diff + 히스토리 포함)
 
 **Follow-up 컨텐츠 구성 규칙**:
 
 | 항목 | 내용 | 비고 |
 |------|------|------|
-| `{ADDRESSED_ISSUES}` | Phase 2에서 사용자가 (A)/(B)를 선택한 이슈 목록 | 번호 + 제목 + 선택 옵션 |
-| `{SKIPPED_ISSUES}` | Skip/Deferred한 이슈 목록 | "DO NOT re-report" 지시 포함 |
-| `{PLAN_DIFF}` | 수정된 Plan의 변경 부분만 | 전체 Plan 재전송 **금지** |
+| `{DIFF_CONTENT}` | `git diff $PREV_COMMIT..$CURRENT_COMMIT` 증분 | 전체 diff 재전송 **금지** |
+| `{REVIEW_HISTORY}` | 이전 라운드 이슈/결정 누적 | "DO NOT re-flag deferred" 지시 포함 |
+| `{ROUND_NUMBER}` | 현재 라운드 번호 | |
+| `{ROUND_DIRECTIVE}` | 후반 라운드 지시 (Round 3+) | Late round focus 지시 |
 
-> **⛔ 전체 Plan 재전송 금지**: follow-up에서는 diff만 전송한다.
-> Thread가 이전 Turn의 전체 Plan을 기억하고 있으므로, 변경된 부분만 보내면 된다.
+> **⛔ 전체 diff 재전송 금지**: follow-up에서는 증분 diff만 전송한다.
+> Thread가 이전 Turn의 전체 컨텍스트를 기억하고 있으므로, 이번 라운드에서 변경된 부분만 보내면 된다.
 
 #### Step 2: codex-review follow-up 실행 (비동기)
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up "{HOME_LITERAL}/.claude/tmp/review_{SID}_fu{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/review_{SID}_fu{N}_output.txt" --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r{N}_prompt.txt" "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r{N}_output.txt" --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"; echo "EXIT_CODE: $?"
 ```
 
 > **동작 원리**: `follow-up` 명령은 state 파일에서 threadId를 읽어 기존 Thread를 resume한 뒤,
@@ -378,24 +249,24 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" follow-up "{HOME_LITERAL}/.cl
 
 #### Step 3: 진행 상황 폴링 (status)
 
-Phase 1 Step 3과 **동일한 폴링 패턴**을 사용한다:
+PHASE 1 Step 3과 **동일한 폴링 패턴**을 사용한다:
 - 30초 간격으로 `status` 명령 호출
 - 2분 초과 시 AskUserQuestion으로 사용자 알림
 - 완료 시 출력 파일 읽기
 
 #### Step 4: 결과 수집
 
-Read 도구로 `{HOME}/.claude/tmp/review_{SID}_fu{N}_output.txt` 읽기.
+Read 도구로 `{HOME}/.claude/tmp/cr_{SID}_r{N}_output.txt` 읽기.
 
 exit code 4 (resume fail) 발생 시:
 - Thread가 손상되었을 수 있음
-- `codex-review start`로 새 Thread 생성 후 전체 Plan으로 재시작
+- `codex-review start`로 새 Thread 생성 후 전체 diff로 재시작
 
 ---
 
-### PHASE 2: 종합본 생성 + 사용자 상호작용
+### PHASE 3: 결과 처리 + 사용자 상호작용
 
-Phase 1 (또는 Phase 1.5) 이 완료된 후 Claude가 직접 결과를 종합한다.
+PHASE 1 또는 PHASE 2가 완료된 후 Claude가 직접 결과를 종합한다.
 
 #### Step 1: 이슈 통합
 
@@ -416,7 +287,7 @@ HIGH 심각도 이슈에 대해 **AskUserQuestion**으로 사용자 결정을 �
     "options": [
       {"label": "#N-(A) {추천 옵션}", "description": "Effort: X, Risk: X, Impact: X"},
       {"label": "#N-(B) {대안}", "description": "Effort: X, Risk: X, Impact: X"},
-      {"label": "#N-Skip", "description": "이 이슈를 인지하고 현재 Plan으로 진행"}
+      {"label": "#N-Skip", "description": "이 이슈를 인지하고 현재 상태로 진행"}
     ]
   }]
 }
@@ -427,79 +298,22 @@ HIGH 심각도 이슈에 대해 **AskUserQuestion**으로 사용자 결정을 �
 
 #### Step 3: 최종 리포트
 
-반드시 아래 형식으로 한국어 최종 리포트를 작성한다:
-
-```
-# Plan Review Report
-
-## 심사 모델
-- GPT-5.3 Codex ✅ / ⏭️ PASS (사유)
-
----
-
-## 이슈 총괄
-
-| # | 심각도 | 영역 | 이슈 | 사용자 결정 |
-|---|--------|------|------|-------------|
-| 1 | HIGH | Area 1 | ... | (A) 채택 |
-| 2 | MED | Area 3 | ... | 권고 |
-| ... | ... | ... | ... | ... |
-
----
-
-## Area 1: Architecture & Design
-
-### [#1] [HIGH] 이슈 제목
-- **문제**: 구체적 설명
-- **선택된 옵션**: (A) — 사용자 결정
-- **적용 방법**: 구체적 수정 가이드
-
-### [#2] ...
-
-## Area 2: Implementation Quality
-...
-
-## Area 3: Test Strategy
-...
-
-## Area 4: Performance & Scalability
-...
-
----
-
-## 최종 Verdict
-
-| 모델 | Phase 1 |
-|---|---|
-| GPT-5.3 | APPROVE/REVISE/REJECT |
-| **종합** | **APPROVE / REVISE / REJECT** |
-
----
-
-## 수정 적용 계획 (사용자 결정 기반)
-
-| 우선순위 | # | 선택 옵션 | 적용 내용 |
-|:--------:|---|-----------|-----------|
-| 1 | #1 | (A) | ... |
-| 2 | #2 | 권고 | ... |
-```
+최종 리포트의 구체적 형식은 `codex-code-review.md`의 **최종 리포트 형식** 섹션을 따른다.
 
 #### Step 4: 세션 종료 (Thread Close)
 
-리뷰가 최종 완료된 후 (PASS 또는 사용자가 "현재 상태로 진행" 선택 시) Thread를 정리한다:
+리뷰가 최종 완료된 후 (수렴 조건 만족 또는 사용자가 명시적으로 종료 요청 시) Thread를 정리한다:
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" close --session "review_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" close --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
 ```
 
-> **주의**: close는 최종 완료 시에만 실행한다. NEEDS_REVISION → follow-up 반복 중에는 Thread를 유지한다.
+> **주의**: close는 최종 완료 시에만 실행한다. Round N → Round N+1 반복 중에는 Thread를 유지한다.
 > close 실패는 무시해도 된다 (Thread 파일은 자동 만료됨).
 
 ---
 
-### 증분 Diff 추출 (코드 리뷰 전용)
-
-> 이 섹션은 `codex-code-review.md`에서만 사용한다. Plan 검증에서는 사용하지 않는다.
+### 증분 Diff 추출
 
 #### Diff 추출 규칙
 
@@ -538,9 +352,7 @@ diff가 30,000자를 초과하는 경우:
 
 ---
 
-### 리뷰 히스토리 (코드 리뷰 전용)
-
-> 이 섹션은 `codex-code-review.md`에서만 사용한다. Plan 검증에서는 사용하지 않는다.
+### 리뷰 히스토리
 
 #### 히스토리 파일
 
@@ -573,7 +385,7 @@ Round 2+ 프롬프트의 `{REVIEW_HISTORY}` 플레이스홀더에 히스토리�
 
 1. 이전 라운드의 이슈 목록 (번호, 심각도, 한줄 요약, 해결 여부)
 2. Deferred 목록 + **"DO NOT re-flag these deferred issues"** 지시
-3. **최대 2000자**로 제한 (초과 시 가장 오래된 라운드부터 요약 축소)
+3. 전체 히스토리를 누적 (라운드 수 제한 없음)
 
 #### 히스토리 누적 예시
 
@@ -592,9 +404,7 @@ DO NOT re-flag: #4 (tight coupling), #5 (suboptimal query)
 
 ---
 
-### Opus 교차검증 (코드 리뷰 전용, 선택사항)
-
-> 이 섹션은 `codex-code-review.md`에서만 사용한다. Plan 검증에서는 사용하지 않는다.
+### Opus 교차검증 (선택사항)
 
 #### 트리거
 
@@ -632,10 +442,7 @@ Task tool의 `oracle` agent (Opus 모델)로 호출한다:
 
 ---
 
-### Code Review Prompt Template (코드 리뷰 전용)
-
-> Plan 검증은 위의 **Review Prompt Template (Phase 1)**을 사용한다.
-> 코드 리뷰는 아래 템플릿을 사용한다.
+### Code Review Prompt Template
 
 ```
 Review the following code changes critically as a senior engineer.
@@ -650,7 +457,7 @@ Review the following code changes critically as a senior engineer.
 
 ## Review Guidelines
 - Report only real issues — if an area has no problems, report none.
-- Up to 4 issues per review area (max 16 total). Prioritize by actual impact.
+- Prioritize by actual impact. Report every real issue you find.
 
 ## Round: {ROUND_NUMBER}
 
@@ -737,9 +544,9 @@ After all issues, provide:
 
 | Exit Code | 의미 | 처리 |
 |:---------:|------|------|
-| 0 | 완료 (`completed`) | 출력 파일 읽기 → Phase 2 진행 |
+| 0 | 완료 (`completed`) | 출력 파일 읽기 → PHASE 3 진행 |
 | 7 | 실행 중 (`running` / `initializing` / `queued`) | 30초 후 재폴링 (2분 초과 시 사용자 알림) |
-| 5 | 타임아웃 (`timeout_partial`, 30분 safety net) | 부분 출력 읽기 → Phase 2 진행 |
+| 5 | 타임아웃 (`timeout_partial`, 30분 safety net) | 부분 출력 읽기 → PHASE 3 진행 |
 | 8 | 취소됨 (`cancelled`) | 부분 출력이 있으면 읽기 |
 | 1 | codex 바이너리 없음 | 즉시 PASS |
 | 2 | 인증 실패 | 즉시 PASS — 사용자에게 `codex login` 안내 |
@@ -759,8 +566,8 @@ codex-review start → exit 0 (워커 시작됨)
   │
   ├─ status 폴링 루프 (30초 간격)
   │   ├─ exit 7 → 실행 중 → 계속 대기 (2분 초과 시 사용자 알림)
-  │   ├─ exit 0 → 완료 → 출력 파일 읽기 → Phase 2
-  │   ├─ exit 5 → 타임아웃 → 부분 출력 읽기 → Phase 2
+  │   ├─ exit 0 → 완료 → 출력 파일 읽기 → PHASE 3
+  │   ├─ exit 5 → 타임아웃 → 부분 출력 읽기 → PHASE 3
   │   ├─ exit 8 → 취소됨 → 부분 출력 있으면 읽기
   │   ├─ exit 1 → PASS (codex 미설치)
   │   ├─ exit 2 → PASS (인증 실패)
@@ -776,7 +583,7 @@ codex-review start → exit 0 (워커 시작됨)
 ```
 
 > **PASS 의미**: 검증을 건너뛰고 다음 단계로 진행한다.
-> 리포트에 "GPT-5.3 Codex: ⏭️ PASS (사유: {exit code 설명})" 형태로 기록한다.
+> 리포트에 "Codex: ⏭️ PASS (사유: {exit code 설명})" 형태로 기록한다.
 
 #### 기타
 
@@ -788,4 +595,4 @@ codex-review start → exit 0 (워커 시작됨)
 
 ---
 
-*Last modified*: 2026-03-23
+*Last modified*: 2026-04-10
