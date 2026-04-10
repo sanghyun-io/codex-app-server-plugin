@@ -27,11 +27,12 @@
  *   8 = turn cancelled
  */
 
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { createInterface } from "node:readline";
+import { createConnection } from "node:net";
 import {
   readFileSync, writeFileSync, unlinkSync, existsSync,
-  openSync, closeSync, renameSync,
+  openSync, closeSync, renameSync, mkdirSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,14 +80,22 @@ class AppServerClient {
 
   async spawn() {
     return new Promise((resolveP, rejectP) => {
-      const isWin = process.platform === "win32";
-      this.proc = isWin
-        ? spawn("cmd", ["/c", "codex", "app-server"], {
-            stdio: ["pipe", "pipe", "pipe"],
-          })
-        : spawn("codex", ["app-server"], {
-            stdio: ["pipe", "pipe", "pipe"],
-          });
+      const customBin = process.env.CODEX_BINARY;
+      if (customBin) {
+        // Custom binary (e.g. fake-codex.mjs for testing)
+        this.proc = spawn(process.execPath, [customBin], {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } else {
+        const isWin = process.platform === "win32";
+        this.proc = isWin
+          ? spawn("cmd", ["/c", "codex", "app-server"], {
+              stdio: ["pipe", "pipe", "pipe"],
+            })
+          : spawn("codex", ["app-server"], {
+              stdio: ["pipe", "pipe", "pipe"],
+            });
+      }
 
       this.proc.on("error", (err) => {
         if (err.code === "ENOENT") {
@@ -323,6 +332,304 @@ class AppServerClient {
 }
 
 // ---------------------------------------------------------------------------
+// BrokerClient — connects to a running broker instead of spawning app-server
+// ---------------------------------------------------------------------------
+
+const BROKER_HOME = process.env.HOME || process.env.USERPROFILE || "";
+const BROKER_TMP = resolve(BROKER_HOME, ".claude", "tmp");
+const BROKER_PORT_FILE = resolve(BROKER_TMP, "broker.port");
+const BROKER_SCRIPT = resolve(dirname(SELF), "broker.mjs");
+
+class BrokerClient {
+  constructor() {
+    this.socket = null;
+    this.rl = null;
+    this.msgId = 0;
+    this.pendingRequests = new Map();
+    this.notificationHandlers = new Map();
+  }
+
+  nextId() { return ++this.msgId; }
+
+  async connect(port) {
+    return new Promise((resolveP, rejectP) => {
+      this.socket = createConnection({ host: "127.0.0.1", port }, () => {
+        this.rl = createInterface({ input: this.socket });
+        this.rl.on("line", (line) => {
+          let msg;
+          try { msg = JSON.parse(line); } catch { return; }
+          this._handleMessage(msg);
+        });
+        resolveP();
+      });
+      this.socket.on("error", (err) => {
+        rejectP(new Error(`Broker connection failed: ${err.message}`));
+      });
+    });
+  }
+
+  _handleMessage(msg) {
+    if (msg.type === "response" && msg.id != null && this.pendingRequests.has(msg.id)) {
+      const { resolve: res, reject: rej } = this.pendingRequests.get(msg.id);
+      this.pendingRequests.delete(msg.id);
+      msg.error ? rej(msg.error) : res(msg.result);
+      return;
+    }
+    if (msg.type === "notification" && msg.method) {
+      const handler = this.notificationHandlers.get(msg.method);
+      if (handler) handler(msg.params);
+      const wildcard = this.notificationHandlers.get("*");
+      if (wildcard) wildcard(msg.method, msg.params);
+    }
+  }
+
+  send(data) {
+    if (!this.socket?.writable) {
+      throw new CodexError(6, "Broker connection not writable");
+    }
+    this.socket.write(JSON.stringify(data) + "\n");
+  }
+
+  request(method, params, timeoutMs = INIT_TIMEOUT_MS) {
+    return new Promise((resolveP, rejectP) => {
+      const id = this.nextId();
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        rejectP(new CodexError(5, `Broker request ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      this.pendingRequests.set(id, {
+        resolve: (result) => { clearTimeout(timer); resolveP(result); },
+        reject: (error) => { clearTimeout(timer); rejectP(error); },
+      });
+
+      this.send({ action: "request", method, params: params || {}, id, timeout: timeoutMs });
+    });
+  }
+
+  notify(method, params) {
+    this.send({ action: "notify", method, params: params || {} });
+  }
+
+  subscribe(methods = ["*"]) {
+    this.send({ action: "subscribe", methods });
+  }
+
+  onNotification(method, handler) {
+    this.notificationHandlers.set(method, handler);
+  }
+
+  // -- High-level operations (same interface as AppServerClient) --
+
+  async initialize() {
+    // Broker is already initialized — just return cached info
+    return { serverInfo: { name: "broker-proxy" } };
+  }
+
+  async checkAuth() {
+    // Broker already checked auth on startup — ping to verify connection
+    this.send({ action: "ping" });
+    return { email: "broker-cached", type: "broker" };
+  }
+
+  async startThread(opts = {}) {
+    return await this.request("thread/start", {
+      model: opts.model || DEFAULT_MODEL,
+      approvalPolicy: "never",
+      ...opts,
+    });
+  }
+
+  async resumeThread(threadId) {
+    try {
+      return await this.request("thread/resume", { threadId });
+    } catch (err) {
+      if (err.message?.includes("no rollout found")) {
+        throw new CodexError(4, `Thread resume failed: ${err.message}`);
+      }
+      throw new CodexError(4, `Thread resume failed: ${err.message || JSON.stringify(err)}`);
+    }
+  }
+
+  async startTurn(threadId, inputText, opts = {}) {
+    const timeoutMs = opts.timeout ?? DEFAULT_HARD_TIMEOUT_MS;
+    const onDelta = opts.onDelta || (() => {});
+    const cancelSignal = opts.cancelSignal || (() => false);
+
+    // Subscribe to turn notifications
+    this.subscribe(["item/agentMessage/delta", "turn/completed", "error"]);
+
+    return new Promise((resolveP, rejectP) => {
+      let agentText = "";
+      let resolved = false;
+
+      const cleanup = () => {
+        if (hardTimer) clearTimeout(hardTimer);
+        if (cancelChecker) clearInterval(cancelChecker);
+        for (const [, pending] of this.pendingRequests) {
+          pending.resolve(null);
+        }
+        this.pendingRequests.clear();
+      };
+
+      const finish = (result) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolveP(result);
+      };
+
+      const fail = (err) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        rejectP(err);
+      };
+
+      const hardTimer = timeoutMs > 0
+        ? setTimeout(() => {
+            if (agentText.length > 0) {
+              finish({ text: agentText, status: "timeout_partial" });
+            } else {
+              fail(new CodexError(5, `Turn timed out after ${timeoutMs}ms with no response`));
+            }
+          }, timeoutMs)
+        : null;
+
+      const cancelChecker = setInterval(() => {
+        if (cancelSignal()) {
+          finish({ text: agentText, status: "cancelled" });
+        }
+      }, CANCEL_CHECK_MS);
+
+      this.onNotification("item/agentMessage/delta", (params) => {
+        agentText += params?.delta || "";
+        onDelta(agentText.length);
+      });
+
+      this.onNotification("turn/completed", (params) => {
+        const turn = params?.turn;
+        if (turn?.status === "completed") {
+          finish({ text: agentText, status: "completed" });
+        } else if (turn?.status === "failed") {
+          const error = turn?.error || params?.error;
+          const errMsg = error?.message || "Turn failed";
+          if (error?.codexErrorInfo === "usageLimitExceeded" || errMsg.includes("usage limit")) {
+            fail(new CodexError(3, `Rate limit exceeded: ${errMsg}`));
+          } else {
+            fail(new CodexError(6, `Turn failed: ${errMsg}`));
+          }
+        } else {
+          finish({ text: agentText, status: turn?.status || "unknown" });
+        }
+      });
+
+      this.onNotification("error", (params) => {
+        const error = params?.error;
+        if (error?.codexErrorInfo === "usageLimitExceeded") {
+          fail(new CodexError(3, `Rate limit exceeded: ${error.message}`));
+        }
+      });
+
+      this.request(
+        "turn/start",
+        {
+          threadId,
+          input: [{ type: "text", text: inputText }],
+          model: opts.model || DEFAULT_MODEL,
+          effort: opts.effort || "high",
+        },
+        timeoutMs || DEFAULT_HARD_TIMEOUT_MS
+      ).catch((err) => {
+        fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${err.message || JSON.stringify(err)}`));
+      });
+    });
+  }
+
+  close() {
+    this.notificationHandlers.clear();
+    this.pendingRequests.clear();
+    if (this.rl) { this.rl.close(); this.rl = null; }
+    if (this.socket) {
+      try { this.socket.destroy(); } catch { /* ignore */ }
+      this.socket = null;
+    }
+  }
+}
+
+/**
+ * Try to connect to an existing broker. If no broker is running, start one
+ * as a detached process and wait for it to become ready.
+ *
+ * Returns a connected BrokerClient, or null if broker is unavailable
+ * (caller should fall back to direct AppServerClient).
+ */
+async function connectOrStartBroker() {
+  // Check for existing broker
+  if (existsSync(BROKER_PORT_FILE)) {
+    const portData = readJson(BROKER_PORT_FILE);
+    if (portData?.port && portData?.pid) {
+      // Verify broker is alive
+      if (isAlive(portData.pid)) {
+        try {
+          const client = new BrokerClient();
+          await client.connect(portData.port);
+          log("Connected to existing broker");
+          return client;
+        } catch {
+          log("Broker port file exists but connection failed, starting new broker");
+        }
+      } else {
+        removeFile(BROKER_PORT_FILE);
+      }
+    }
+  }
+
+  // Start new broker
+  if (!existsSync(BROKER_SCRIPT)) {
+    log("Broker script not found, falling back to direct connection");
+    return null;
+  }
+
+  if (!existsSync(BROKER_TMP)) {
+    mkdirSync(BROKER_TMP, { recursive: true });
+  }
+
+  log("Starting new broker...");
+  const logPath = resolve(BROKER_TMP, "broker.log");
+  const logFd = openSync(logPath, "w");
+
+  const brokerProc = spawn(process.execPath, [BROKER_SCRIPT], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: process.env,
+  });
+  brokerProc.unref();
+  closeSync(logFd);
+
+  // Wait for broker to write port file (up to 15s)
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    if (existsSync(BROKER_PORT_FILE)) {
+      const portData = readJson(BROKER_PORT_FILE);
+      if (portData?.port) {
+        try {
+          const client = new BrokerClient();
+          await client.connect(portData.port);
+          log(`Connected to new broker on port ${portData.port}`);
+          return client;
+        } catch {
+          // Broker not ready yet, keep waiting
+        }
+      }
+    }
+  }
+
+  log("Broker startup timeout, falling back to direct connection");
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // File helpers
 // ---------------------------------------------------------------------------
 
@@ -437,13 +744,23 @@ async function workerMain(parsed) {
 
   progress("initializing");
 
-  const client = new AppServerClient();
+  // Try broker first, fall back to direct AppServerClient
+  // Broker can be disabled via env (useful for testing with fake-codex)
+  const brokerDisabled = !!process.env.CODEX_REVIEW_NO_BROKER;
+  let client = brokerDisabled ? null : await connectOrStartBroker();
+  let usedBroker = !!client;
 
-  try {
+  if (!client) {
+    client = new AppServerClient();
     await client.spawn();
     await client.initialize();
     const account = await client.checkAuth();
-    log(`Auth: ${account.type} / ${account.planType} / ${account.email}`);
+    log(`Auth (direct): ${account.type} / ${account.planType} / ${account.email}`);
+  } else {
+    log("Using broker connection (auth cached)");
+  }
+
+  try {
 
     let threadId;
     let effectiveModel = model;
@@ -784,6 +1101,123 @@ async function cmdClose(parsed) {
 }
 
 // ---------------------------------------------------------------------------
+// CLI Command: scope
+// ---------------------------------------------------------------------------
+
+const SCOPE_THRESHOLDS = {
+  // Files changed thresholds
+  SMALL_FILES: 5,
+  LARGE_FILES: 20,
+  // Total lines changed thresholds
+  SMALL_LINES: 100,
+  LARGE_LINES: 500,
+  // Untracked file size cap (bytes)
+  UNTRACKED_CAP: 24_576,    // 24 KB
+  // Inline diff size cap (chars)
+  DIFF_CAP: 262_144,        // 256 KB
+};
+
+function cmdScope(parsed) {
+  const base = parsed.positional[0] || null; // optional base ref
+
+  let shortstat = "";
+  let filesChanged = 0;
+  let insertions = 0;
+  let deletions = 0;
+  let untrackedCount = 0;
+  let totalLines = 0;
+
+  try {
+    // Determine diff base
+    let diffCmd;
+    if (base) {
+      diffCmd = `git diff --shortstat ${base}...HEAD`;
+    } else {
+      // Try current branch vs default branch
+      let defaultBranch;
+      try {
+        defaultBranch = execSync(
+          "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
+          { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+        ).trim();
+      } catch {
+        defaultBranch = "main";
+      }
+
+      // Check for uncommitted changes first
+      const uncommitted = execSync("git diff --shortstat", { encoding: "utf8" }).trim();
+      const staged = execSync("git diff --cached --shortstat", { encoding: "utf8" }).trim();
+
+      if (uncommitted || staged) {
+        // Working tree mode: uncommitted + staged changes
+        diffCmd = "git diff HEAD --shortstat";
+      } else {
+        // Branch mode: current branch vs default
+        diffCmd = `git diff ${defaultBranch}...HEAD --shortstat`;
+      }
+    }
+
+    shortstat = execSync(diffCmd, { encoding: "utf8" }).trim();
+
+    // Parse shortstat: "N files changed, N insertions(+), N deletions(-)"
+    const filesMatch = shortstat.match(/(\d+) files? changed/);
+    const insMatch = shortstat.match(/(\d+) insertions?\(\+\)/);
+    const delMatch = shortstat.match(/(\d+) deletions?\(-\)/);
+
+    filesChanged = filesMatch ? parseInt(filesMatch[1], 10) : 0;
+    insertions = insMatch ? parseInt(insMatch[1], 10) : 0;
+    deletions = delMatch ? parseInt(delMatch[1], 10) : 0;
+    totalLines = insertions + deletions;
+
+    // Count untracked files
+    try {
+      const untracked = execSync("git ls-files --others --exclude-standard", { encoding: "utf8" }).trim();
+      untrackedCount = untracked ? untracked.split("\n").length : 0;
+    } catch { /* ignore */ }
+
+  } catch (err) {
+    // Not in a git repo or git command failed
+    console.log(JSON.stringify({
+      error: `Git command failed: ${err.message}`,
+      recommendation: "foreground",
+    }, null, 2));
+    process.exit(0);
+    return;
+  }
+
+  // Determine recommendation
+  let recommendation;
+  let reason;
+
+  if (totalLines <= SCOPE_THRESHOLDS.SMALL_LINES && filesChanged <= SCOPE_THRESHOLDS.SMALL_FILES) {
+    recommendation = "foreground";
+    reason = `Small change (${filesChanged} files, ${totalLines} lines)`;
+  } else if (totalLines >= SCOPE_THRESHOLDS.LARGE_LINES || filesChanged >= SCOPE_THRESHOLDS.LARGE_FILES) {
+    recommendation = "background";
+    reason = `Large change (${filesChanged} files, ${totalLines} lines) — background recommended for non-blocking execution`;
+  } else {
+    recommendation = "either";
+    reason = `Medium change (${filesChanged} files, ${totalLines} lines) — either mode works`;
+  }
+
+  const result = {
+    files_changed: filesChanged,
+    insertions,
+    deletions,
+    total_lines: totalLines,
+    untracked_files: untrackedCount,
+    recommendation,
+    reason,
+    thresholds: {
+      untracked_cap_bytes: SCOPE_THRESHOLDS.UNTRACKED_CAP,
+      diff_cap_chars: SCOPE_THRESHOLDS.DIFF_CAP,
+    },
+  };
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
 // CLI parsing
 // ---------------------------------------------------------------------------
 
@@ -796,6 +1230,7 @@ Usage:
   codex-review status     --session <SID> --review-dir <DIR>
   codex-review cancel     --session <SID> --review-dir <DIR>
   codex-review close      --session <SID> --review-dir <DIR>
+  codex-review scope      [<base-ref>]
 
 Options:
   --model <MODEL>       Model to use (default: gpt-5.4, env: CODEX_REVIEW_MODEL)
@@ -857,6 +1292,22 @@ function parseArgs(argv) {
     }
   }
 
+  // scope command doesn't require --session / --review-dir
+  if (command === "scope") {
+    return {
+      command,
+      positional,
+      sessionId: sessionId || "",
+      reviewDir: reviewDir ? resolve(reviewDir) : "",
+      model: model || process.env.CODEX_REVIEW_MODEL || DEFAULT_MODEL,
+      modelExplicit: model !== null,
+      timeout: DEFAULT_HARD_TIMEOUT_MS,
+      nonce,
+      foreground,
+      isWorker,
+    };
+  }
+
   // Validate required args
   if (!sessionId) {
     console.error("Error: --session <SID> is required");
@@ -916,6 +1367,9 @@ async function main() {
         break;
       case "close":
         await cmdClose(parsed);
+        break;
+      case "scope":
+        cmdScope(parsed);
         break;
       default:
         console.error(`Unknown command: ${parsed.command}`);
