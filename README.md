@@ -139,7 +139,7 @@ After installation, add to your `~/.claude/CLAUDE.md`:
 | Delegate | `/codex-review-rules:delegate` | Delegate a coding task (A+ pattern — Codex proposes, Claude applies) |
 | Sessions | `/codex-review-rules:sessions` | List all Codex sessions (running + completed) |
 | Halt | `/codex-review-rules:halt` | Cancel a running Codex session |
-| Readout | `/codex-review-rules:readout` | Show a completed session's output and `threadId` for external resume |
+| Readout | `/codex-review-rules:readout` | Show a completed session's output along with its metadata (model, turn count, internal thread ID) |
 
 ### Natural Language Router
 

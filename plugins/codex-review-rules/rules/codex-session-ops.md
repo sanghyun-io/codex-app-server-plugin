@@ -44,7 +44,12 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 | 1 | sessions 절차로 완료된(`completed` / `cancelled` / `timeout_partial`) 세션 수집 |
 | 2 | 복수 세션이면 **AskUserQuestion**으로 대상 선택 |
 | 3 | 해당 세션의 최신 `_output.txt`를 Read로 읽고 표시 |
-| 4 | `_state.json`에서 `threadId` 추출하여 "외부 Codex CLI로 이어 쓰기" 안내 |
+| 4 | `_state.json`에서 `threadId` + 턴 수 + 모델을 추출해 메타데이터로 함께 표시 |
+
+> **참고**: 여기서 말하는 `threadId`는 Codex App Server가 관리하는 내부 thread ID이며,
+> 사용자가 직접 interactive `codex` CLI로 이어 쓸 수 있는 session UUID와는 다르다.
+> 후속 turn이 필요하면 같은 스킬(`/codex-review-rules:code-review` 등)을 다시 호출하여
+> `codex-review follow-up` 경로로 진행해야 한다.
 
 ---
 
@@ -119,7 +124,8 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 Partial output (if any): {HOME}/.claude/tmp/{prefix}_{SID}_{last}_output.txt
 
-To resume later, use the thread_id from {prefix}_{SID}_state.json with codex CLI directly.
+The thread state ({prefix}_{SID}_state.json) is preserved — you can invoke the same
+skill again and it will follow up on the existing thread instead of starting fresh.
 ```
 
 ---
@@ -134,21 +140,12 @@ To resume later, use the thread_id from {prefix}_{SID}_state.json with codex CLI
 **Skill**: {skill}
 **Model**: {model}
 **Turns**: {turn_count}
-**Thread ID**: `{threadId}`
+**Thread ID**: `{threadId}` (internal App Server thread)
 **Status**: {status}
 
 ---
 
 {output content}
-
----
-
-### Resume Externally
-
-To continue this Codex thread from the `codex` CLI:
-```bash
-codex resume --thread {threadId}
-```
 ```
 
 ---

@@ -59,13 +59,13 @@ triggers:
 
 | 의도 | 트리거 키워드 | 라우팅 스킬 | 요약 |
 |------|--------------|------------|------|
-| **코드 리뷰** | 리뷰, 검토, review, 잘못된 거, 품질 확인 | `/codex-review-rules:code-review` | 반복 코드 리뷰 (기존 워크플로) |
-| **공격자 관점 리뷰** | 보안, 취약점, 공격, 침투, red team, 악의적, 해킹 | `/codex-review-rules:red-review` | 보안/취약점 집중 리뷰 |
-| **작업 위임 (수정/구현/디버깅)** | 고쳐, 수정, 구현, 만들어, 작성, 리팩터, 버그, 디버그, fix, implement, refactor | `/codex-review-rules:delegate` | Codex가 구체적 변경안을 제시 → Claude가 실행 (A+ 패턴) |
-| **질의** | 물어봐, 확인해, 알려줘, 찾아봐, ask, explain, why | `/codex-review-rules:delegate` (read-only 모드) | 파일 쓰기 없이 질의응답만 |
-| **세션 현황 조회** | 세션, 상태, 돌아가는 거, 진행 중, running, status | `/codex-review-rules:sessions` | 모든 Codex 세션 목록 |
-| **세션 중단** | 중단, 취소, 멈춰, stop, cancel, kill | `/codex-review-rules:halt` | 실행 중인 세션 중단 |
-| **결과 꺼내기** | 결과, 출력, 마저 보기, result, output, readout | `/codex-review-rules:readout` | 완료된 세션의 output + thread_id 표시 |
+| **코드 리뷰** | 리뷰, 검토, review, 잘못된 거, 품질 확인 | `/code-review` | 반복 코드 리뷰 (기존 워크플로) |
+| **공격자 관점 리뷰** | 보안, 취약점, 공격, 침투, red team, 악의적, 해킹 | `/red-review` | 보안/취약점 집중 리뷰 |
+| **작업 위임 (수정/구현/디버깅)** | 고쳐, 수정, 구현, 만들어, 작성, 리팩터, 버그, 디버그, fix, implement, refactor | `/delegate` | Codex가 구체적 변경안을 제시 → Claude가 실행 (A+ 패턴) |
+| **질의** | 물어봐, 확인해, 알려줘, 찾아봐, ask, explain, why | `/delegate` (read-only 모드) | 파일 쓰기 없이 질의응답만 |
+| **세션 현황 조회** | 세션, 상태, 돌아가는 거, 진행 중, running, status | `/sessions` | 모든 Codex 세션 목록 |
+| **세션 중단** | 중단, 취소, 멈춰, stop, cancel, kill | `/halt` | 실행 중인 세션 중단 |
+| **결과 꺼내기** | 결과, 출력, 마저 보기, result, output, readout | `/readout` | 완료된 세션의 output + 메타데이터 표시 |
 
 ### 모호한 경우 AskUserQuestion 예시
 
@@ -158,12 +158,12 @@ Claude: codex-review close로 Thread 종료
 
 | Skill | Trigger Condition | Execution Mode | Description |
 |-------|-------------------|:--------------:|-------------|
-| `/codex-review-rules:code-review` | "Codex에게 리뷰 부탁" 등 리뷰 의도 감지 | auto | 반복 코드 리뷰 |
-| `/codex-review-rules:red-review` | "Codex에게 보안 검토" 등 공격 관점 의도 | auto | 공격자 관점 리뷰 |
-| `/codex-review-rules:delegate` | "Codex에게 고쳐/구현 부탁" 등 작업 의도 | auto | A+ 패턴 작업 위임 |
-| `/codex-review-rules:sessions` | "Codex 세션 상태" 등 조회 의도 | auto | 세션 현황 표시 |
-| `/codex-review-rules:halt` | "Codex 중단/취소" 등 중단 의도 | auto | 실행 중 세션 중단 |
-| `/codex-review-rules:readout` | "Codex 결과 꺼내" 등 결과 조회 의도 | auto | 완료 세션 결과 표시 |
+| `/code-review` | "Codex에게 리뷰 부탁" 등 리뷰 의도 감지 | auto | 반복 코드 리뷰 |
+| `/red-review` | "Codex에게 보안 검토" 등 공격 관점 의도 | auto | 공격자 관점 리뷰 |
+| `/delegate` | "Codex에게 고쳐/구현 부탁" 등 작업 의도 | auto | A+ 패턴 작업 위임 |
+| `/sessions` | "Codex 세션 상태" 등 조회 의도 | auto | 세션 현황 표시 |
+| `/halt` | "Codex 중단/취소" 등 중단 의도 | auto | 실행 중 세션 중단 |
+| `/readout` | "Codex 결과 꺼내" 등 결과 조회 의도 | auto | 완료 세션 결과 표시 |
 
 <!-- @/linked-skills -->
 

@@ -59,7 +59,6 @@ review-protocol.md의 **증분 Diff 추출** 섹션을 따른다 (Round 1 = 전�
 아래 **Red Review Prompt Template**를 사용한다.
 
 플레이스홀더 치환:
-- `{REVIEW_MODE}`: Phase 0 자동 감지
 - `{DIFF_CONTENT}`: Step 1에서 추출한 diff
 - `{PROJECT_CONTEXT}`: 프로젝트 CLAUDE.md
 - `{REVIEW_HISTORY}`: (Round 1에서는 비어 있음)

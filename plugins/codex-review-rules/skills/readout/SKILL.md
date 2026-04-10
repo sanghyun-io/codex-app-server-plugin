@@ -1,6 +1,6 @@
 ---
 name: readout
-description: Display the output of a completed Codex session along with its thread_id, so you can resume the thread externally via the codex CLI. Works for code-review, delegate, and red-review sessions.
+description: Display the output and metadata (model, turn count, internal thread ID, status) of a completed Codex session. Works for code-review, delegate, and red-review sessions.
 argument-hint: "[<session-id>]"
 invocation:
   command: readout
@@ -9,7 +9,7 @@ invocation:
 
 # Readout
 
-Fetch and display the output of a completed Codex session (completed, cancelled, or timeout_partial), together with the `threadId` needed to resume it from the `codex` CLI directly.
+Fetch and display the output of a completed Codex session (completed, cancelled, or timeout_partial), together with its metadata. The `threadId` shown is the App Server's internal thread identifier, not a resumable session UUID for the interactive `codex` CLI — use the same Claude skill again to follow up on the thread.
 
 Follow the workflow defined in `~/.claude/rules/codex-session-ops.md` (section: **결과 조회**).
 

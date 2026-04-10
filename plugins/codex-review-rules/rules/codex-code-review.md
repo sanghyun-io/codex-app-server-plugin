@@ -70,7 +70,6 @@ Round 1: git diff $BASE_COMMIT..$CURRENT_COMMIT (전체)
 review-protocol.md의 **Code Review Prompt Template**를 사용한다.
 
 플레이스홀더 치환:
-- `{REVIEW_MODE}`: Phase 0 자동 감지 (review-protocol.md 기준)
 - `{DIFF_CONTENT}`: Step 1에서 추출한 diff
 - `{PROJECT_CONTEXT}`: 프로젝트 CLAUDE.md
 - `{REVIEW_HISTORY}`: (Round 1에서는 비어 있음)
@@ -200,7 +199,6 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 ## 리뷰 요약
 - **대상**: {branch} vs {base} (또는 PR #{N})
 - **라운드 수**: {total_rounds}
-- **리뷰 모드**: {BIG CHANGE / SMALL CHANGE}
 
 ## 심사 모델
 - Codex (gpt-5.4): {라운드별 verdict 요약}
@@ -234,9 +232,9 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 
 | 모델 | 최종 라운드 |
 |---|---|
-| Codex (gpt-5.4) | APPROVE / REVISE |
-| Opus (선택) | APPROVE / REVISE |
-| **종합** | **APPROVE / REVISE** |
+| Codex (gpt-5.4) | APPROVE / REVISE / REJECT |
+| Opus (선택) | APPROVE / REVISE / REJECT |
+| **종합** | **APPROVE / REVISE / REJECT** |
 ```
 
 ---
