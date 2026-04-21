@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "sanghyun-io's Claude Code plugins",
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "plugins": [
     {
       "name": "codex-review-core",
       "source": "./plugins/codex-review-core",
       "description": "Codex App Server wrapper for Claude Code — installs the codex-review CLI binary",
-      "version": "1.3.0",
+      "version": "1.3.1",
       "author": { "name": "sanghyun-io" },
       "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
       "license": "MIT",

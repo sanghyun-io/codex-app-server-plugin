@@ -86,12 +86,14 @@ class AppServerClient {
         // Custom binary (e.g. fake-codex.mjs for testing)
         this.proc = spawn(process.execPath, [customBin], {
           stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
         });
       } else {
         const isWin = process.platform === "win32";
         this.proc = isWin
           ? spawn("cmd", ["/c", "codex", "app-server"], {
               stdio: ["pipe", "pipe", "pipe"],
+              windowsHide: true,
             })
           : spawn("codex", ["app-server"], {
               stdio: ["pipe", "pipe", "pipe"],
@@ -604,6 +606,7 @@ async function connectOrStartBroker() {
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env: process.env,
+    windowsHide: true,
   });
   brokerProc.unref();
   closeSync(logFd);
@@ -914,6 +917,7 @@ function spawnWorker(parsed) {
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env: process.env,
+    windowsHide: true,
   });
 
   // Write PID file with nonce for identity verification

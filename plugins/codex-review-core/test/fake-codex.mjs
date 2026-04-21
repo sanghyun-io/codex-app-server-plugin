@@ -7,10 +7,13 @@
  * Responds to: initialize, account/read, thread/start, thread/resume, turn/start.
  *
  * Environment variables:
- *   FAKE_TURN_DELAY_MS   — Delay before completing the turn (default: 200)
- *   FAKE_TURN_TEXT        — Response text for the turn (default: "Fake review output")
- *   FAKE_TURN_FAIL        — If set, turn fails with this message
- *   FAKE_AUTH_FAIL         — If set, account/read returns no account
+ *   FAKE_TURN_DELAY_MS     — Delay before emitting the first delta (default: 200)
+ *   FAKE_TURN_TEXT          — Response text for the turn
+ *   FAKE_TURN_FAIL          — If set, turn fails with this message
+ *   FAKE_AUTH_FAIL          — If set, account/read returns no account
+ *   FAKE_TAG_THREAD         — If set, prefix each delta with `[<threadId>] `
+ *                              so concurrent-turn tests can distinguish streams.
+ *   FAKE_DELTA_INTERVAL_MS  — Delay between delta chunks (default: 20)
  */
 
 import { createInterface } from "node:readline";
@@ -19,6 +22,8 @@ const TURN_DELAY = parseInt(process.env.FAKE_TURN_DELAY_MS || "200", 10);
 const TURN_TEXT = process.env.FAKE_TURN_TEXT || "Fake review output for testing.\n\n[VERDICT] - APPROVE";
 const TURN_FAIL = process.env.FAKE_TURN_FAIL || "";
 const AUTH_FAIL = !!process.env.FAKE_AUTH_FAIL;
+const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
+const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
 
 const rl = createInterface({ input: process.stdin });
 
@@ -69,14 +74,17 @@ function handleRequest(msg) {
           return;
         }
 
-        // Send deltas in chunks
-        const chunks = TURN_TEXT.match(/.{1,50}/g) || [TURN_TEXT];
+        // Optionally tag each delta with its threadId so concurrent-turn
+        // tests can detect if deltas from one thread leak into another.
+        const tagged = TAG_THREAD ? `[${threadId}] ${TURN_TEXT}` : TURN_TEXT;
+        const chunks = tagged.match(/.{1,50}/g) || [tagged];
+
         let delay = 0;
         for (const chunk of chunks) {
           setTimeout(() => {
             send({ method: "item/agentMessage/delta", params: { delta: chunk } });
           }, delay);
-          delay += 20;
+          delay += DELTA_INTERVAL_MS;
         }
 
         // Send completion after all deltas
