@@ -26,12 +26,16 @@ let sessionCounter = 0;
 function newSid() { return `test_${Date.now()}_${++sessionCounter}`; }
 
 function cli(args, opts = {}) {
+  const baseEnv = opts.home
+    ? { ...process.env, HOME: opts.home, USERPROFILE: opts.home }
+    : { ...process.env };
   const env = {
-    ...process.env,
+    ...baseEnv,
     CODEX_BINARY: FAKE_CODEX,
-    CODEX_REVIEW_NO_BROKER: "1",
     FAKE_TURN_DELAY_MS: String(opts.turnDelay ?? 100),
     FAKE_TURN_TEXT: opts.turnText ?? "Test output.\n\n[VERDICT] - APPROVE",
+    ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
+    ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
     ...(opts.authFail ? { FAKE_AUTH_FAIL: "1" } : {}),
   };
@@ -180,6 +184,131 @@ describe("error handling", () => {
     writeFileSync(prompt, "test", "utf8");
     const r = cli(["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR, "--foreground"], { authFail: true });
     assert.equal(r.exit, 2);
+  });
+});
+
+describe("broker turn serialization", () => {
+  const BROKER_HOME = resolve(TEST_DIR, "broker_home");
+  const BROKER_TMP = resolve(BROKER_HOME, ".claude", "tmp");
+  const BROKER_PORT_FILE = resolve(BROKER_TMP, "broker.port");
+
+  before(() => {
+    mkdirSync(BROKER_TMP, { recursive: true });
+  });
+
+  after(() => {
+    // Kill any broker we started so it doesn't linger between runs
+    if (existsSync(BROKER_PORT_FILE)) {
+      try {
+        const data = JSON.parse(readFileSync(BROKER_PORT_FILE, "utf8"));
+        if (data?.pid) {
+          try { process.kill(data.pid, "SIGTERM"); } catch { /* already dead */ }
+        }
+      } catch { /* ignore */ }
+    }
+  });
+
+  async function pollToComplete(sid, timeoutMs = 30_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(300);
+      const r = cli(
+        ["status", "--session", sid, "--review-dir", TEST_DIR],
+        { broker: true, home: BROKER_HOME }
+      );
+      if (r.exit === 0) return JSON.parse(r.stdout);
+      if (![7].includes(r.exit)) throw new Error(`status exit ${r.exit}: ${r.stderr}`);
+    }
+    throw new Error(`Session ${sid} did not complete within ${timeoutMs}ms`);
+  }
+
+  it("does not mix deltas between concurrent turns", async () => {
+    // Two concurrent sessions share the same broker/upstream. Each emits
+    // deltas tagged with its threadId. If the broker routed notifications
+    // to the wrong subscriber, one session's output would contain the
+    // other's threadId tag.
+    const mkSession = (marker) => {
+      const sid = newSid();
+      const promptPath = resolve(TEST_DIR, `${sid}_p.txt`);
+      const outputPath = resolve(TEST_DIR, `${sid}_o.txt`);
+      writeFileSync(promptPath, `Prompt for ${marker}.`, "utf8");
+      return { sid, promptPath, outputPath, marker };
+    };
+
+    const sessions = [mkSession("AAA"), mkSession("BBB")];
+
+    // Start both sessions back-to-back so their turns overlap on the broker
+    for (const s of sessions) {
+      const r = cli(
+        ["start", s.promptPath, s.outputPath, "--session", s.sid, "--review-dir", TEST_DIR],
+        {
+          broker: true,
+          home: BROKER_HOME,
+          tagThread: true,
+          turnDelay: 500,
+          turnText: `Turn output for ${s.marker}.\n\n[VERDICT] - APPROVE`,
+        }
+      );
+      assert.equal(r.exit, 0, `start failed for ${s.marker}: ${r.stderr}`);
+    }
+
+    // Wait for both to complete
+    for (const s of sessions) {
+      const progress = await pollToComplete(s.sid);
+      assert.equal(progress.status, "completed", `session ${s.marker} status`);
+      assert.ok(existsSync(s.outputPath), `output missing for ${s.marker}`);
+    }
+
+    // Each output should contain exactly one threadId tag, and the two
+    // sessions must have different tags.
+    const tag1 = readFileSync(sessions[0].outputPath, "utf8").match(/\[fake-thread-\d+\]/g) || [];
+    const tag2 = readFileSync(sessions[1].outputPath, "utf8").match(/\[fake-thread-\d+\]/g) || [];
+    assert.equal(tag1.length, 1, `session AAA has ${tag1.length} thread tags: ${tag1}`);
+    assert.equal(tag2.length, 1, `session BBB has ${tag2.length} thread tags: ${tag2}`);
+    assert.notEqual(tag1[0], tag2[0], "concurrent sessions leaked into each other");
+  });
+
+  it("serializes three concurrent turn-starts in FIFO order", async () => {
+    // Three simultaneous starts must each end up with exactly one unique
+    // threadId tag, proving the broker isolated each turn's notification
+    // stream from the others.
+    const sessions = Array.from({ length: 3 }, (_, i) => {
+      const sid = newSid();
+      const promptPath = resolve(TEST_DIR, `${sid}_p.txt`);
+      const outputPath = resolve(TEST_DIR, `${sid}_o.txt`);
+      writeFileSync(promptPath, `Prompt ${i}.`, "utf8");
+      return { sid, promptPath, outputPath, idx: i };
+    });
+
+    for (const s of sessions) {
+      const r = cli(
+        ["start", s.promptPath, s.outputPath, "--session", s.sid, "--review-dir", TEST_DIR],
+        {
+          broker: true,
+          home: BROKER_HOME,
+          tagThread: true,
+          turnDelay: 400,
+          turnText: `Content ${s.idx}.\n\n[VERDICT] - APPROVE`,
+        }
+      );
+      assert.equal(r.exit, 0, `start ${s.idx} failed: ${r.stderr}`);
+    }
+
+    for (const s of sessions) {
+      const progress = await pollToComplete(s.sid, 45_000);
+      assert.equal(progress.status, "completed", `session ${s.idx} status`);
+    }
+
+    const tags = sessions.map((s) => {
+      const content = readFileSync(s.outputPath, "utf8");
+      const match = content.match(/\[fake-thread-\d+\]/g) || [];
+      assert.equal(match.length, 1, `session ${s.idx} has ${match.length} thread tags: ${match}`);
+      return match[0];
+    });
+
+    // All three tags must be distinct — no session received another's deltas.
+    const unique = new Set(tags);
+    assert.equal(unique.size, tags.length, `concurrent sessions leaked: ${tags}`);
   });
 });
 
