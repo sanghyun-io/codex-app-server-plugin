@@ -22,10 +22,10 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 ## Examples
 
 ```
-/codex-review-rules:code-review
-/codex-review-rules:code-review PR#123
-/codex-review-rules:code-review --base develop --model gpt-4o
-/codex-review-rules:code-review --with-opus --model gpt-5.4
+/codex-code-review:code-review
+/codex-code-review:code-review PR#123
+/codex-code-review:code-review --base develop --model gpt-4o
+/codex-code-review:code-review --with-opus --model gpt-5.4
 ```
 
 ## Execution
@@ -35,4 +35,4 @@ $ARGUMENTS
 Follow the complete workflow defined in `~/.claude/rules/codex-code-review.md`.
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
-Run `/codex-review-core:setup` if you haven't configured the plugin yet.
+Run `/codex-core:setup` if you haven't configured the plugin yet.

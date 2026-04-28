@@ -1,0 +1,13 @@
+{
+  "name": "codex-core",
+  "description": "Codex integration for Claude Code — natural language router, A+ delegation, session ops, and the codex-review CLI runtime",
+  "version": "2.0.0",
+  "author": {
+    "name": "sanghyun-io",
+    "email": "ppkimsanh@gmail.com"
+  },
+  "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
+  "repository": "https://github.com/sanghyun-io/codex-app-server-plugin",
+  "license": "MIT",
+  "keywords": ["codex", "app-server", "claude-code", "delegate", "natural-language"]
+}

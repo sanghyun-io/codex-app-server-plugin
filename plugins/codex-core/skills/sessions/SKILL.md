@@ -24,4 +24,4 @@ Follow the workflow defined in `~/.claude/rules/codex-session-ops.md` (section: 
 $ARGUMENTS
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
-Run `/codex-review-core:setup` if you haven't configured the plugin yet.
+Run `/codex-core:setup` if you haven't configured the plugin yet.

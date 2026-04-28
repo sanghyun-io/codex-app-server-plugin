@@ -1,21 +1,23 @@
 # codex-app-server-plugin
 
-A Claude Code plugin monorepo that integrates the **Codex App Server** with Claude Code, enabling stateful multi-round iterative code review using **gpt-5.4** (or any configurable model).
+A Claude Code plugin marketplace that integrates the **Codex App Server** with Claude Code. Lets you call Codex (gpt-5.4 by default, configurable) from natural language or slash commands, with stateful threads and cross-turn context reuse.
 
 ## Plugins
 
-This repo contains two independent plugins. Install only what you need:
+| Plugin | What it gives you | Required |
+|--------|-------------------|:--------:|
+| **codex-core** | Everything needed to use Codex from Claude Code: CLI runtime, broker, hooks, natural language router, A+ task delegation (`/codex-core:delegate`), and session ops (`sessions`/`halt`/`readout`) | ✅ |
+| **codex-code-review** | Iterative multi-round code review and adversarial security review workflows (`/codex-code-review:code-review`, `/codex-code-review:red-review`) | Optional |
 
-| Plugin | Purpose | Required |
-|--------|---------|:--------:|
-| **codex-review-core** | Codex App Server CLI wrapper (`codex-review.mjs`) | ✅ |
-| **codex-review-rules** | Review workflow rules for iterative code review | Optional |
+After installing **codex-core** alone, sentences like "Codex에게 이 버그 고쳐달라고 해" or "Have Codex fix the race condition" already work — Claude routes them to the right skill automatically.
+
+**codex-code-review** adds review-specific workflows on top: round-by-round issue tracking, deferred issue history, opt-in Opus cross-validation.
 
 ## How It Works
 
 ```
 Claude Code
-  └─ codex-review.mjs              (JSON-RPC wrapper — installed by codex-review-core)
+  └─ codex-review.mjs              (JSON-RPC wrapper — installed by codex-core)
        └─ broker.mjs (TCP, opt-out) (persistent IPC serializer — auth cached, warm app-server)
             └─ codex app-server      (single subprocess, shared across workers)
                  └─ gpt-5.4            (stateful thread, model is configurable)
@@ -28,7 +30,7 @@ The wrapper manages thread lifecycle via three commands:
 
 By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s) and reuses a single auth check across all workers. The broker auto-starts on first use, idles out after 10 minutes, and is torn down by the `SessionEnd` hook. Set `CODEX_REVIEW_NO_BROKER=1` to bypass the broker and spawn `codex app-server` directly (used in tests).
 
-The model used for review is configurable (priority: CLI flag > env var > default):
+The model used for each call is configurable (priority: CLI flag > env var > default `gpt-5.4`):
 
 ```bash
 # CLI flag
@@ -36,9 +38,6 @@ node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --
 
 # Environment variable
 CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
-
-# Default (no override needed)
-node codex-review.mjs start ...  # uses gpt-5.4
 ```
 
 ### Environment Variables
@@ -61,19 +60,21 @@ node codex-review.mjs start ...  # uses gpt-5.4
 # 1. Add marketplace
 /plugin marketplace add sanghyun-io/codex-app-server-plugin
 
-# 2. Install core (CLI binary only)
-claude plugin install codex-review-core@sanghyun-io
+# 2. Install core (gives you natural language + delegate + session ops)
+/plugin install codex-core@sanghyun-io
 
-# 3. (Optional) Install rules for full review workflow
-claude plugin install codex-review-rules@sanghyun-io
+# 3. (Optional) Install code-review workflows
+/plugin install codex-code-review@sanghyun-io
 
-# 4. Verify setup
-/codex-review-core:setup
+# 4. Verify
+/codex-core:setup
 ```
 
-## Plugin: codex-review-core
+The `codex-core` install hook auto-activates rules by appending a marker block to `~/.claude/CLAUDE.md`. The block is idempotent (safe to re-run).
 
-Installs the `codex-review.mjs` CLI binary, the broker, lifecycle scripts, and the review output schema to `~/.claude/`. No rules are added — Claude's behavior is unchanged until you explicitly invoke the binary or install `codex-review-rules`.
+## Plugin: codex-core
+
+The runtime + universal workflows. Installs CLI binary, broker, hook scripts, schemas, the natural language router, A+ delegation, and session operations.
 
 ### Installed Files
 
@@ -84,90 +85,57 @@ Installs the `codex-review.mjs` CLI binary, the broker, lifecycle scripts, and t
 | `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd handler (worker + broker cleanup) |
 | `stop-gate.mjs` | `~/.claude/bin/` | Stop hook quality gate (active reviews / uncommitted changes) |
 | `review-output.schema.json` | `~/.claude/schemas/` | JSON schema for structured review output |
+| `review-protocol.md` | `~/.claude/rules/` | Shared call protocol (session ID, polling, error handling) |
+| `codex-delegation.md` | `~/.claude/rules/` | Natural language intent router |
+| `codex-delegate.md` | `~/.claude/rules/` | A+ task delegation workflow |
+| `codex-session-ops.md` | `~/.claude/rules/` | Session list / cancel / readout |
 
 ### Hook Events
 
-`codex-review-core` registers four hooks via `hooks.json`:
-
 | Event | Script | Purpose |
 |-------|--------|---------|
-| `Setup` | `scripts/install.sh` | Copies bin/schemas into `~/.claude/` on plugin install |
+| `Setup` | `scripts/install.sh` | Copies bin/schemas/rules into `~/.claude/`, manages CLAUDE.md marker block, auto-removes legacy v1.x markers |
 | `SessionStart` | `session-lifecycle.mjs start` | Exports session metadata for worker coordination |
 | `SessionEnd` | `session-lifecycle.mjs end` | Kills running workers, shuts down broker, cleans temp files |
 | `Stop` | `stop-gate.mjs` | Blocks session stop when reviews are in flight or unreviewed changes exist |
 
 ### Skills
 
-| Skill | Invocation |
-|-------|-----------|
-| Setup | `/codex-review-core:setup` |
-
-## Plugin: codex-review-rules (Optional)
-
-Installs review workflow rules that instruct Claude to automatically offer iterative code review using Codex.
-
-> **Requires** `codex-review-core` to be installed first.
-
-### Installed Files
-
-| File | Location | Purpose |
-|------|----------|---------|
-| `review-protocol.md` | `~/.claude/rules/` | Shared protocol (session, polling, prompts) |
-| `codex-code-review.md` | `~/.claude/rules/` | Code review workflow |
-| `codex-red-review.md` | `~/.claude/rules/` | Adversarial (security) review workflow |
-| `codex-delegate.md` | `~/.claude/rules/` | A+ task delegation workflow |
-| `codex-session-ops.md` | `~/.claude/rules/` | Session list / cancel / readout |
-| `codex-delegation.md` | `~/.claude/rules/` | Natural language intent router |
-
-Rules are **auto-activated** during installation: the install script appends a marked block to `~/.claude/CLAUDE.md`:
-
-```
-<!-- @codex-review-rules:begin -->
-@~/.claude/rules/review-protocol.md
-@~/.claude/rules/codex-delegation.md
-@~/.claude/rules/codex-code-review.md
-@~/.claude/rules/codex-red-review.md
-@~/.claude/rules/codex-delegate.md
-@~/.claude/rules/codex-session-ops.md
-<!-- @codex-review-rules:end -->
-```
-
-The original `CLAUDE.md` is backed up to `CLAUDE.md.bak`. Re-running the installer is idempotent (the block is skipped if the begin marker is already present). To deactivate, remove the block manually.
-
-### Skills
-
 | Skill | Invocation | Description |
 |-------|-----------|-------------|
-| Code Review | `/codex-review-rules:code-review` | Iterative multi-round code review |
-| Red Review | `/codex-review-rules:red-review` | Adversarial, security-focused review |
-| Delegate | `/codex-review-rules:delegate` | Delegate a coding task (A+ pattern — Codex proposes, Claude applies) |
-| Sessions | `/codex-review-rules:sessions` | List all Codex sessions (running + completed) |
-| Halt | `/codex-review-rules:halt` | Cancel a running Codex session |
-| Readout | `/codex-review-rules:readout` | Show a completed session's output along with its metadata (model, turn count, internal thread ID) |
+| Setup | `/codex-core:setup` | Verify Node, codex CLI, auth, and installed files |
+| Delegate | `/codex-core:delegate <task>` | A+ task delegation — Codex proposes, Claude applies |
+| Sessions | `/codex-core:sessions` | List all Codex sessions (running + completed) |
+| Halt | `/codex-core:halt` | Cancel a running Codex session |
+| Readout | `/codex-core:readout` | Display a completed session's output + metadata |
 
 ### Natural Language Router
 
-With `codex-delegation.md` imported, Claude auto-routes when you mention Codex in plain language. The router inspects the verb and dispatches to the right skill — no slash command required.
+With `codex-delegation.md` imported (auto-activated on install), Claude routes Codex-related requests in plain language — no slash command needed.
 
 | You say | Routes to |
 |---------|-----------|
-| "Codex에게 리뷰 부탁해" / "Have Codex review this" | `code-review` |
-| "Codex로 보안 검토해줘" / "Ask Codex to check for vulns" | `red-review` |
 | "Codex에게 이 버그 고쳐달라고 해" / "Let Codex fix the race condition" | `delegate` |
 | "Codex에게 이 함수가 왜 느린지 물어봐" (read-only) | `delegate --read-only` |
 | "Codex 세션 뭐 돌아가고 있어?" / "What Codex sessions are running" | `sessions` |
 | "Codex 지금 거 중단해" / "Stop the Codex session" | `halt` |
 | "Codex 그 결과 다시 보여줘" / "Show me that Codex output" | `readout` |
-| "Codex에게 **gpt-4o로** 리뷰 부탁" / "Have Codex review **with gpt-4o**" | `code-review --model gpt-4o` |
-| "**o1 써서** 보안 검토" / "Ask Codex **using o1**" | `red-review --model o1` |
+| "Codex에게 **gpt-4o로** 부탁" / "Have Codex **with gpt-4o**" | (any) `--model gpt-4o` |
+| "**o1 써서** 검토" / "Ask Codex **using o1**" | (any) `--model o1` |
 
 If the intent is ambiguous, Claude asks with an `AskUserQuestion` prompt instead of guessing.
 
+Code review intents (`/codex-code-review:code-review`, `/codex-code-review:red-review`) only route correctly when `codex-code-review` is installed.
+
 ### Model Override
 
-Any skill (code-review, red-review, delegate) accepts `--model <name>` to override the Codex model used for that session. Priority: CLI flag > `CODEX_REVIEW_MODEL` env var > default (`gpt-5.4`).
+Every Codex-backed skill accepts `--model <name>`. Priority:
 
-The natural language router also extracts model names from prefixes like `gpt-*`, `o1*`, `claude-*`, `gemini-*` — see the table above. The selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
+1. `--model <name>` CLI flag (highest)
+2. `CODEX_REVIEW_MODEL` environment variable
+3. Default (`gpt-5.4`)
+
+Recognized prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 
 ### A+ Delegation Pattern
 
@@ -180,43 +148,121 @@ The natural language router also extracts model names from prefixes like `gpt-*`
 
 This keeps file writes under Claude's tool-permission control while letting Codex drive the plan.
 
+### Examples
+
+```
+/codex-core:delegate Fix the null pointer in UserService.login
+/codex-core:delegate Refactor auth middleware to use JWT --model gpt-4o
+/codex-core:delegate Why is /api/v1/users returning 500 --read-only
+
+/codex-core:sessions            # List all sessions
+/codex-core:sessions --running  # Only running
+/codex-core:halt                # Pick a running session to cancel
+/codex-core:halt cr_1728473812_9876
+/codex-core:readout             # Pick a completed session to view
+/codex-core:readout dg_1728473812_9876
+```
+
+## Plugin: codex-code-review (Optional)
+
+Iterative and adversarial code review workflows on top of codex-core.
+
+> **Requires** `codex-core` to be installed first.
+
+### Installed Files
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `codex-code-review.md` | `~/.claude/rules/` | Iterative code review workflow |
+| `codex-red-review.md` | `~/.claude/rules/` | Adversarial (security) review workflow |
+
+The install hook adds a separate marker block (`<!-- @codex-code-review:begin -->`) to `~/.claude/CLAUDE.md`.
+
+### Skills
+
+| Skill | Invocation | Description |
+|-------|-----------|-------------|
+| Code Review | `/codex-code-review:code-review` | Iterative multi-round code review |
+| Red Review | `/codex-code-review:red-review` | Adversarial, security-focused review |
+
 ### Code Review
 
 ```
-/codex-review-rules:code-review                  # Current branch vs default branch
-/codex-review-rules:code-review PR#123           # Review a specific PR
-/codex-review-rules:code-review --base main      # Review against a specific base
-/codex-review-rules:code-review --model gpt-4o   # Override Codex model
-/codex-review-rules:code-review --with-opus      # Add Claude Opus cross-validation
+/codex-code-review:code-review                  # Current branch vs default branch
+/codex-code-review:code-review PR#123           # Review a specific PR
+/codex-code-review:code-review --base main      # Review against a specific base
+/codex-code-review:code-review --model gpt-4o   # Override Codex model
+/codex-code-review:code-review --with-opus      # Add Claude Opus cross-validation
 ```
 
 ### Red Review
 
 ```
-/codex-review-rules:red-review                   # Adversarial review of current branch
-/codex-review-rules:red-review PR#123            # Adversarial review of a PR
-/codex-review-rules:red-review --model o1        # Override Codex model
-/codex-review-rules:red-review --with-opus       # Add Claude Opus cross-validation
+/codex-code-review:red-review                   # Adversarial review of current branch
+/codex-code-review:red-review PR#123            # Adversarial review of a PR
+/codex-code-review:red-review --model o1        # Override Codex model
+/codex-code-review:red-review --with-opus       # Add Claude Opus cross-validation
 ```
 
-### Delegate
+## Migration from v1.x
+
+v2.0.0 renames both plugins and reorganizes which plugin owns which features.
+
+### Name changes
+
+| v1.x | v2.0 |
+|------|------|
+| `codex-review-core` | **`codex-core`** |
+| `codex-review-rules` | **`codex-code-review`** |
+
+### Feature relocation
+
+| File / Skill | v1.x location | v2.0 location |
+|--------------|---------------|---------------|
+| `review-protocol.md` | rules | **core** |
+| `codex-delegation.md` | rules | **core** |
+| `codex-delegate.md` | rules | **core** |
+| `codex-session-ops.md` | rules | **core** |
+| `delegate`, `sessions`, `halt`, `readout` skills | rules | **core** |
+| `codex-code-review.md` | rules | code-review |
+| `codex-red-review.md` | rules | code-review |
+| `code-review`, `red-review` skills | rules | code-review |
+
+This means installing **codex-core alone** is now enough to use Codex from Claude Code — natural language, A+ delegation, and session ops all work without `codex-code-review`.
+
+### Slash command changes
+
+| v1.x | v2.0 |
+|------|------|
+| `/codex-review-core:setup` | `/codex-core:setup` |
+| `/codex-review-rules:delegate` | `/codex-core:delegate` |
+| `/codex-review-rules:sessions` | `/codex-core:sessions` |
+| `/codex-review-rules:halt` | `/codex-core:halt` |
+| `/codex-review-rules:readout` | `/codex-core:readout` |
+| `/codex-review-rules:code-review` | `/codex-code-review:code-review` |
+| `/codex-review-rules:red-review` | `/codex-code-review:red-review` |
+
+### Migration steps
 
 ```
-/codex-review-rules:delegate Fix the null pointer in UserService.login
-/codex-review-rules:delegate Refactor auth middleware to use JWT --model gpt-5.4
-/codex-review-rules:delegate Why is /api/v1/users returning 500 --read-only
+# 1. Update marketplace
+/plugin marketplace update sanghyun-io
+
+# 2. Uninstall old plugins
+/plugin uninstall codex-review-core@sanghyun-io
+/plugin uninstall codex-review-rules@sanghyun-io
+
+# 3. Install v2 plugins
+/plugin install codex-core@sanghyun-io
+/plugin install codex-code-review@sanghyun-io   # optional, only if you want code-review workflows
+
+# 4. Verify
+/codex-core:setup
 ```
 
-### Session Operations
+The `codex-core` install hook automatically removes the legacy `<!-- @codex-review-rules:begin -->...<!-- @codex-review-rules:end -->` block from `~/.claude/CLAUDE.md` and replaces it with the new `<!-- @codex-core:begin -->...` block. Your existing CLAUDE.md is backed up to `CLAUDE.md.bak` before any change.
 
-```
-/codex-review-rules:sessions            # List all sessions
-/codex-review-rules:sessions --running  # Only running
-/codex-review-rules:halt                # Pick a running session to cancel
-/codex-review-rules:halt cr_1728473812_9876
-/codex-review-rules:readout             # Pick a completed session to view
-/codex-review-rules:readout dg_1728473812_9876
-```
+Files in `~/.claude/rules/` keep their names — no rename happens at the file level.
 
 ## Exit Codes
 
@@ -227,8 +273,10 @@ This keeps file writes under Claude's tool-permission control while letting Code
 | 2 | Auth failure | Auto-skip + `codex login` guide |
 | 3 | Rate limit | Auto-skip |
 | 4 | Thread resume fail | Retry with new thread |
-| 5 | Timeout (5 min) | Auto-skip |
+| 5 | Turn timeout (30 min safety net) | Save partial output |
 | 6 | Process error | 1 retry, then skip |
+| 7 | Turn still running | (status command only) |
+| 8 | Turn cancelled | Save partial output |
 
 ## License
 

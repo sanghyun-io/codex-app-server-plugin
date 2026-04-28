@@ -1,7 +1,7 @@
 {
-  "name": "codex-review-core",
-  "description": "Codex App Server wrapper for Claude Code — installs the codex-review CLI binary",
-  "version": "1.3.1",
+  "name": "codex-code-review",
+  "description": "Iterative and adversarial code review workflows powered by Codex (requires codex-core)",
+  "version": "2.0.0",
   "author": {
     "name": "sanghyun-io",
     "email": "ppkimsanh@gmail.com"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/sanghyun-io/codex-app-server-plugin",
   "repository": "https://github.com/sanghyun-io/codex-app-server-plugin",
   "license": "MIT",
-  "keywords": ["codex", "app-server", "claude-code"]
+  "keywords": ["codex", "code-review", "claude-code"]
 }
