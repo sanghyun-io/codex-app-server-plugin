@@ -1,7 +1,7 @@
 ---
 name: red-review
 description: Adversarial security-focused code review using Codex. Unlike the default code-review, this prompt instructs Codex to act as an attacker hunting for vulnerabilities, auth bypasses, race conditions, injection flaws, and data leakage paths.
-argument-hint: "[PR#N | --base <ref>] [--with-opus]"
+argument-hint: "[PR#N | --base <ref>] [--model <name>] [--with-opus]"
 invocation:
   command: red-review
   user_invocable: true
@@ -18,7 +18,17 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 - `(no args)` — Review current branch vs default branch
 - `PR#N` — Review PR number N via `gh pr diff N`
 - `--base <ref>` — Review against a specific base ref
+- `--model <name>` — Override Codex model (default: `gpt-5.4`, env: `CODEX_REVIEW_MODEL`)
 - `--with-opus` — Enable Opus cross-validation after Codex review
+
+## Examples
+
+```
+/codex-review-rules:red-review
+/codex-review-rules:red-review PR#123
+/codex-review-rules:red-review --base develop --model gpt-4o
+/codex-review-rules:red-review --with-opus
+```
 
 ## Execution
 

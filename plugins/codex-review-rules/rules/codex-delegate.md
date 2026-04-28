@@ -68,6 +68,18 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 - Codex에게 "파일 변경 제안 없이 답변만 반환하라" 지시
 - Claude는 적용 단계를 건너뛰고 답변을 사용자에게 표시
 
+### 모델 오버라이드 처리
+
+`$ARGUMENTS`를 파싱하여 `--model <X>` 인자를 확인한다:
+
+| 상황 | 처리 |
+|------|------|
+| `--model <X>` 명시 | Turn 1 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
+| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.4` 사용) |
+
+> **follow-up 자동 처리**: `start`에서 지정한 모델은 `dg_{SID}_state.json`에 저장되어
+> 후속 `follow-up` 호출에서 자동 재사용된다. follow-up에 `--model`을 다시 명시할 필요는 없다.
+
 ---
 
 ## Turn 1: 초기 프롬프트
@@ -83,6 +95,8 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start --stdin "{HOME_LITERAL}
 PROMPT_EOF
 echo "EXIT_CODE: $?"
 ```
+
+`$ARGUMENTS`에 `--model <X>`가 있으면 위 명령에 `--model "<X>"`를 추가한다 (예: `--review-dir "..." --model "gpt-4o" <<'PROMPT_EOF'`).
 
 ### Step 2: 폴링
 
