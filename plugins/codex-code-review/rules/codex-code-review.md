@@ -43,7 +43,7 @@ triggers:
 | (없음) | 현재 브랜치 vs default branch (`git diff $DEFAULT_BRANCH...HEAD`) |
 | `PR#N` | `gh pr diff N` |
 | `--base <ref>` | `git diff <ref>...HEAD` |
-| `--model <name>` | Codex 모델 오버라이드 (default: `gpt-5.4`, env: `CODEX_REVIEW_MODEL`) |
+| `--model <name>` | Codex 모델 오버라이드 (default: `gpt-5.5`, env: `CODEX_REVIEW_MODEL`) |
 | `--with-opus` | Opus 교차검증 활성화 |
 
 ### Base Commit 기록
@@ -66,7 +66,7 @@ CURRENT_COMMIT=$(git rev-parse HEAD)
 | 상황 | 처리 |
 |------|------|
 | `--model <X>` 명시 | 모든 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
-| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.4` 사용) |
+| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.5` 사용) |
 
 ### CLI 명령 형식
 
@@ -88,7 +88,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
 ### 최종 리포트에 모델 표시
 
 `codex-review status` 또는 `cr_{SID}_state.json`에서 실제 사용된 모델을 추출하여 최종 리포트의
-"심사 모델" / "최종 Verdict" 섹션의 `Codex (gpt-5.4)` 표기를 실제 모델명으로 교체한다.
+"심사 모델" / "최종 Verdict" 섹션의 `Codex (gpt-5.5)` 표기를 실제 모델명으로 교체한다.
 
 ---
 
@@ -238,7 +238,7 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 - **라운드 수**: {total_rounds}
 
 ## 심사 모델
-- Codex (gpt-5.4): {라운드별 verdict 요약}
+- Codex (gpt-5.5): {라운드별 verdict 요약}
 - Opus 교차검증: ✅ / ⏭️ SKIP (사유)
 
 ---
@@ -269,7 +269,7 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 
 | 모델 | 최종 라운드 |
 |---|---|
-| Codex (gpt-5.4) | APPROVE / REVISE / REJECT |
+| Codex (gpt-5.5) | APPROVE / REVISE / REJECT |
 | Opus (선택) | APPROVE / REVISE / REJECT |
 | **종합** | **APPROVE / REVISE / REJECT** |
 ```

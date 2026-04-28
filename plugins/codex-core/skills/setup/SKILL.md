@@ -384,7 +384,7 @@ Show the final summary:
   "Codex에게 이 버그 고쳐달라고 해" / "Codex로 gpt-4o 써서 검토 부탁"
   같은 자연어도 codex-delegation 라우터가 감지해서 적절한 스킬로 연결됩니다.
 
-모델: gpt-5.4 (Stateful Thread, --model 플래그 / CODEX_REVIEW_MODEL 환경변수로 오버라이드)
+모델: gpt-5.5 (Stateful Thread, --model 플래그 / CODEX_REVIEW_MODEL 환경변수로 오버라이드)
 브로커: 기본 활성화 (CODEX_REVIEW_NO_BROKER=1 로 비활성화 가능)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```

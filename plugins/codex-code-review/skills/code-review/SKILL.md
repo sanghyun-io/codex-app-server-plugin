@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Start a multi-round iterative code review using Codex App Server (default model gpt-5.4). Tracks issues across rounds until convergence. Reviews current branch vs default branch by default.
+description: Start a multi-round iterative code review using Codex App Server (default model gpt-5.5). Tracks issues across rounds until convergence. Reviews current branch vs default branch by default.
 argument-hint: "[PR#N | --base <ref>] [--model <name>] [--with-opus]"
 invocation:
   command: code-review
@@ -16,7 +16,7 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 - `(no args)` — Review current branch vs default branch
 - `PR#N` — Review PR number N via `gh pr diff N`
 - `--base <ref>` — Review against a specific base ref
-- `--model <name>` — Override Codex model (default: `gpt-5.4`, env: `CODEX_REVIEW_MODEL`)
+- `--model <name>` — Override Codex model (default: `gpt-5.5`, env: `CODEX_REVIEW_MODEL`)
 - `--with-opus` — Enable Opus cross-validation after Codex review
 
 ## Examples
@@ -25,7 +25,7 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 /codex-code-review:code-review
 /codex-code-review:code-review PR#123
 /codex-code-review:code-review --base develop --model gpt-4o
-/codex-code-review:code-review --with-opus --model gpt-5.4
+/codex-code-review:code-review --with-opus
 ```
 
 ## Execution

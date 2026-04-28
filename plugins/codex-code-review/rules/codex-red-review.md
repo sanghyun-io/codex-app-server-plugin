@@ -201,7 +201,7 @@ code-review의 최종 리포트 형식을 기반으로 하되, verdict 줄을 �
 ```
 | 모델 | 최종 라운드 |
 |---|---|
-| Codex (gpt-5.4) | SECURE / AT_RISK / COMPROMISED |
+| Codex (gpt-5.5) | SECURE / AT_RISK / COMPROMISED |
 | Opus (선택) | SECURE / AT_RISK / COMPROMISED |
 | **종합** | **SECURE / AT_RISK / COMPROMISED** |
 ```

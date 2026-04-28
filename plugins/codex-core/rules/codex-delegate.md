@@ -75,7 +75,7 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 | 상황 | 처리 |
 |------|------|
 | `--model <X>` 명시 | Turn 1 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
-| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.4` 사용) |
+| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.5` 사용) |
 
 > **follow-up 자동 처리**: `start`에서 지정한 모델은 `dg_{SID}_state.json`에 저장되어
 > 후속 `follow-up` 호출에서 자동 재사용된다. follow-up에 `--model`을 다시 명시할 필요는 없다.
