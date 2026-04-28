@@ -167,7 +167,7 @@ Claude: codex-review close로 Thread 종료
 
 다음 prefix 중 하나로 시작하는 토큰을 모델명 후보로 간주한다:
 
-- `gpt-*` (예: `gpt-4o`, `gpt-5.4`, `gpt-5`)
+- `gpt-*` (예: `gpt-4o`, `gpt-5.5`, `gpt-5`)
 - `o1*`, `o3*`, `o4*` (예: `o1`, `o1-mini`, `o3-pro`)
 - `claude-*` (예: `claude-3.5-sonnet`)
 - `gemini-*`

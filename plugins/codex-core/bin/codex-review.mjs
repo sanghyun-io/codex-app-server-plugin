@@ -11,7 +11,7 @@
  *   close      --session <SID> --review-dir <DIR>                     Clean up all session files
  *
  * Options:
- *   --model <MODEL>       Model override (default: gpt-5.4, env: CODEX_REVIEW_MODEL)
+ *   --model <MODEL>       Model override (default: gpt-5.5, env: CODEX_REVIEW_MODEL)
  *   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
  *   --foreground          Run synchronously (v1 compat, no background worker)
  *   --stdin               Read prompt from stdin and write to <prompt-file> (avoids Write tool permission)
@@ -43,7 +43,7 @@ import { randomBytes } from "node:crypto";
 // Config
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MODEL = "gpt-5.4";
+const DEFAULT_MODEL = "gpt-5.5";
 const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
@@ -1271,7 +1271,7 @@ Usage:
   codex-review scope      [<base-ref>]
 
 Options:
-  --model <MODEL>       Model to use (default: gpt-5.4, env: CODEX_REVIEW_MODEL)
+  --model <MODEL>       Model to use (default: gpt-5.5, env: CODEX_REVIEW_MODEL)
   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
   --foreground          Run synchronously (v1 compat)
   --stdin               Read prompt from stdin, write to <prompt-file>

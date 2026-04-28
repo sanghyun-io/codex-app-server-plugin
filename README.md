@@ -1,6 +1,6 @@
 # codex-app-server-plugin
 
-A Claude Code plugin marketplace that integrates the **Codex App Server** with Claude Code. Lets you call Codex (gpt-5.4 by default, configurable) from natural language or slash commands, with stateful threads and cross-turn context reuse.
+A Claude Code plugin marketplace that integrates the **Codex App Server** with Claude Code. Lets you call Codex (gpt-5.5 by default, configurable) from natural language or slash commands, with stateful threads and cross-turn context reuse.
 
 ## Plugins
 
@@ -20,7 +20,7 @@ Claude Code
   └─ codex-review.mjs              (JSON-RPC wrapper — installed by codex-core)
        └─ broker.mjs (TCP, opt-out) (persistent IPC serializer — auth cached, warm app-server)
             └─ codex app-server      (single subprocess, shared across workers)
-                 └─ gpt-5.4            (stateful thread, model is configurable)
+                 └─ gpt-5.5            (stateful thread, model is configurable)
 ```
 
 The wrapper manages thread lifecycle via three commands:
@@ -30,7 +30,7 @@ The wrapper manages thread lifecycle via three commands:
 
 By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s) and reuses a single auth check across all workers. The broker auto-starts on first use, idles out after 10 minutes, and is torn down by the `SessionEnd` hook. Set `CODEX_REVIEW_NO_BROKER=1` to bypass the broker and spawn `codex app-server` directly (used in tests).
 
-The model used for each call is configurable (priority: CLI flag > env var > default `gpt-5.4`):
+The model used for each call is configurable (priority: CLI flag > env var > default `gpt-5.5`):
 
 ```bash
 # CLI flag
@@ -44,7 +44,7 @@ CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `CODEX_REVIEW_MODEL` | Override default model | `gpt-5.4` |
+| `CODEX_REVIEW_MODEL` | Override default model | `gpt-5.5` |
 | `CODEX_REVIEW_NO_BROKER` | Skip broker, spawn `codex app-server` directly (set to `1`) | unset |
 | `CODEX_BINARY` | Path to a custom binary used in place of `codex app-server` (testing hook) | unset |
 
@@ -133,7 +133,7 @@ Every Codex-backed skill accepts `--model <name>`. Priority:
 
 1. `--model <name>` CLI flag (highest)
 2. `CODEX_REVIEW_MODEL` environment variable
-3. Default (`gpt-5.4`)
+3. Default (`gpt-5.5`)
 
 Recognized prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 

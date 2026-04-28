@@ -75,7 +75,7 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 ```json
 {
   "threadId": "thr_abc123...",
-  "model": "gpt-5.4",
+  "model": "gpt-5.5",
   "turnCount": 3,
   "lastTurnAt": "2026-04-10T10:25:12.456Z"
 }
@@ -100,15 +100,15 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 | Session | Skill | Model | Elapsed | Chars | Status |
 |---------|-------|-------|--------:|------:|--------|
-| cr_123456_78 | code-review | gpt-5.4 | 45s | 3,200 | running |
-| dg_123457_89 | delegate | gpt-5.4 | 2m 12s | 8,500 | running ⚠️ |
+| cr_123456_78 | code-review | gpt-5.5 | 45s | 3,200 | running |
+| dg_123457_89 | delegate | gpt-5.5 | 2m 12s | 8,500 | running ⚠️ |
 
 ## Completed Sessions (N)
 
 | Session | Skill | Model | Turns | Last Updated | Status |
 |---------|-------|-------|:-----:|--------------|--------|
-| cr_123400_12 | code-review | gpt-5.4 | 3 | 2026-04-10 09:45 | completed |
-| dg_123410_34 | delegate | gpt-5.4 | 5 | 2026-04-10 10:15 | cancelled |
+| cr_123400_12 | code-review | gpt-5.5 | 3 | 2026-04-10 09:45 | completed |
+| dg_123410_34 | delegate | gpt-5.5 | 5 | 2026-04-10 10:15 | cancelled |
 ```
 
 > **⚠️ 강조**: 2분 이상 실행 중인 세션.
