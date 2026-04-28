@@ -48,7 +48,7 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 > **참고**: 여기서 말하는 `threadId`는 Codex App Server가 관리하는 내부 thread ID이며,
 > 사용자가 직접 interactive `codex` CLI로 이어 쓸 수 있는 session UUID와는 다르다.
-> 후속 turn이 필요하면 같은 스킬(`/codex-review-rules:code-review` 등)을 다시 호출하여
+> 후속 turn이 필요하면 같은 스킬(`/codex-code-review:code-review` 또는 `/codex-core:delegate` 등)을 다시 호출하여
 > `codex-review follow-up` 경로로 진행해야 한다.
 
 ---

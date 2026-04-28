@@ -7,13 +7,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  codex-review-rules - Installation${NC}"
+echo -e "${BLUE}  codex-code-review - Installation${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}"
 
-# Install rules → ~/.claude/rules/
+# Install rules → ~/.claude/rules/  (codex-code-review, codex-red-review)
 RULES_DIR="$HOME/.claude/rules"
 mkdir -p "$RULES_DIR"
 
@@ -34,34 +34,30 @@ echo ""
 
 # Auto-activate: append @imports to ~/.claude/CLAUDE.md
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
-MARKER_BEGIN="<!-- @codex-review-rules:begin -->"
-MARKER_END="<!-- @codex-review-rules:end -->"
+MARKER_BEGIN="<!-- @codex-code-review:begin -->"
+MARKER_END="<!-- @codex-code-review:end -->"
 
 mkdir -p "$HOME/.claude"
 
 if [ -f "$CLAUDE_MD" ] && grep -qF "$MARKER_BEGIN" "$CLAUDE_MD"; then
-  echo -e "${YELLOW}⚠️  CLAUDE.md already contains codex-review-rules block, skipping activation${NC}"
+  echo -e "${YELLOW}⚠️  CLAUDE.md already contains codex-code-review block, skipping activation${NC}"
 else
-  if [ -f "$CLAUDE_MD" ]; then
+  if [ -f "$CLAUDE_MD" ] && [ ! -f "$CLAUDE_MD.bak" ]; then
     cp "$CLAUDE_MD" "$CLAUDE_MD.bak"
     echo -e "✓ Backed up existing CLAUDE.md → ${GREEN}CLAUDE.md.bak${NC}"
-  else
+  elif [ ! -f "$CLAUDE_MD" ]; then
     touch "$CLAUDE_MD"
   fi
 
   {
     echo ""
     echo "$MARKER_BEGIN"
-    echo "@~/.claude/rules/review-protocol.md"
-    echo "@~/.claude/rules/codex-delegation.md"
     echo "@~/.claude/rules/codex-code-review.md"
     echo "@~/.claude/rules/codex-red-review.md"
-    echo "@~/.claude/rules/codex-delegate.md"
-    echo "@~/.claude/rules/codex-session-ops.md"
     echo "$MARKER_END"
   } >> "$CLAUDE_MD"
 
-  echo -e "✓ Activated rules in ${GREEN}~/.claude/CLAUDE.md${NC}"
+  echo -e "✓ Activated code-review workflows in ${GREEN}~/.claude/CLAUDE.md${NC}"
 fi
 
 echo ""
@@ -70,11 +66,8 @@ echo -e "${GREEN}✓ Installation complete! ${INSTALLED_COUNT} rule file(s) inst
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BLUE}📚 Next:${NC}"
-echo "   /codex-review-rules:code-review   — iterative code review"
-echo "   /codex-review-rules:red-review    — adversarial security review"
-echo "   /codex-review-rules:delegate ...  — delegate a coding task"
-echo "   /codex-review-rules:sessions      — list all Codex sessions"
+echo "   /codex-code-review:code-review   — iterative code review"
+echo "   /codex-code-review:red-review    — adversarial security review"
 echo ""
-echo -e "${YELLOW}💡 Rules are auto-activated via markers in ~/.claude/CLAUDE.md${NC}"
-echo -e "${YELLOW}   To deactivate: remove the codex-review-rules block or run uninstall${NC}"
+echo -e "${YELLOW}💡 Requires codex-core (the runtime + delegate + session ops)${NC}"
 echo ""

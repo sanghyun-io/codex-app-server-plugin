@@ -24,9 +24,9 @@ Follow the complete workflow defined in `~/.claude/rules/codex-delegate.md`.
 ## Examples
 
 ```
-/codex-review-rules:delegate Refactor auth middleware to use JWT instead of session tokens
-/codex-review-rules:delegate Find and fix the race condition in OrderService --model gpt-5.4
-/codex-review-rules:delegate Why does /api/v1/users return 500 when email is null --read-only
+/codex-core:delegate Refactor auth middleware to use JWT instead of session tokens
+/codex-core:delegate Find and fix the race condition in OrderService --model gpt-5.4
+/codex-core:delegate Why does /api/v1/users return 500 when email is null --read-only
 ```
 
 ## Execution
@@ -34,4 +34,4 @@ Follow the complete workflow defined in `~/.claude/rules/codex-delegate.md`.
 $ARGUMENTS
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
-Run `/codex-review-core:setup` if you haven't configured the plugin yet.
+Run `/codex-core:setup` if you haven't configured the plugin yet.

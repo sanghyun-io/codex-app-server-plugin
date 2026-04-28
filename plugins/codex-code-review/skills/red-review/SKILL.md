@@ -24,10 +24,10 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 ## Examples
 
 ```
-/codex-review-rules:red-review
-/codex-review-rules:red-review PR#123
-/codex-review-rules:red-review --base develop --model gpt-4o
-/codex-review-rules:red-review --with-opus
+/codex-code-review:red-review
+/codex-code-review:red-review PR#123
+/codex-code-review:red-review --base develop --model gpt-4o
+/codex-code-review:red-review --with-opus
 ```
 
 ## Execution
@@ -35,4 +35,4 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 $ARGUMENTS
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
-Run `/codex-review-core:setup` if you haven't configured the plugin yet.
+Run `/codex-core:setup` if you haven't configured the plugin yet.

@@ -1,12 +1,12 @@
 ---
 name: setup
-description: Setup and verify Codex App Server Plugin. Checks Node.js, codex CLI, authentication, and installed files. Run after plugin installation.
+description: Setup and verify codex-core (and optional codex-code-review). Checks Node.js, codex CLI, authentication, and installed files. Run after plugin installation.
 invocation:
   command: setup
   user_invocable: true
 ---
 
-# Codex App Server Plugin — Setup
+# codex-core — Setup
 
 Guide the user through verifying the complete plugin installation step by step.
 
@@ -17,22 +17,23 @@ Guide the user through verifying the complete plugin installation step by step.
 Use Bash to locate plugin cache files dynamically (version-independent):
 
 ```bash
-CORE_ROOT=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-core -type d -name "bin" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-RULES_DIR=$(find ~/.claude/plugins/cache/sanghyun-io/codex-review-rules -type d -name "rules" 2>/dev/null | head -1)
+CORE_ROOT=$(find ~/.claude/plugins/cache/sanghyun-io/codex-core -type d -name "bin" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+REVIEW_ROOT=$(find ~/.claude/plugins/cache/sanghyun-io/codex-code-review -type d -name "rules" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
 echo "CORE_ROOT=$CORE_ROOT"
-echo "RULES_DIR=$RULES_DIR"
+echo "REVIEW_ROOT=$REVIEW_ROOT  (optional — may be empty if not installed)"
 ```
 
 **If Bash is unavailable** (permission denied / don't ask mode):
 - Show: "⚠️ Shell restricted — cannot verify automatically. Please run in terminal: `ls ~/.claude/bin/codex-review.mjs ~/.claude/rules/review-protocol.md`"
 - Proceed to Step 2.
 
-**If CORE_ROOT or RULES_DIR is empty**: Stop and report:
+**If CORE_ROOT is empty**: Stop and report:
 ```
-Plugin cache not found. Please reinstall:
-  claude plugin install codex-review-core@sanghyun-io
-  claude plugin install codex-review-rules@sanghyun-io
+codex-core cache not found. Please reinstall:
+  /plugin install codex-core@sanghyun-io
 ```
+
+`REVIEW_ROOT` empty is OK — `codex-code-review` is optional.
 
 **Compare each file against cache using Bash**:
 
@@ -83,9 +84,25 @@ for name in review-output.schema.json; do
   fi
 done
 
-# rules files (all .md in the rules cache dir)
-if [ -d "$RULES_DIR" ]; then
-  for src in "$RULES_DIR"/*.md; do
+# core rules (review-protocol, codex-delegation, codex-delegate, codex-session-ops)
+if [ -d "$CORE_ROOT/rules" ]; then
+  for src in "$CORE_ROOT/rules"/*.md; do
+    [ -f "$src" ] || continue
+    name=$(basename "$src")
+    dest="$INSTALLED_RULES/$name"
+    if [ ! -f "$dest" ]; then
+      echo "MISSING: $name"
+    elif diff -q "$src" "$dest" > /dev/null 2>&1; then
+      echo "MATCH: $name"
+    else
+      echo "DIFFER: $name"
+    fi
+  done
+fi
+
+# code-review rules (only if installed)
+if [ -n "$REVIEW_ROOT" ] && [ -d "$REVIEW_ROOT/rules" ]; then
+  for src in "$REVIEW_ROOT/rules"/*.md; do
     [ -f "$src" ] || continue
     name=$(basename "$src")
     dest="$INSTALLED_RULES/$name"
@@ -141,9 +158,16 @@ done
 # schemas
 [ -f "$CORE_ROOT/schemas/review-output.schema.json" ] && cp "$CORE_ROOT/schemas/review-output.schema.json" ~/.claude/schemas/
 
-# rules (copy every *.md from the cache)
-if [ -d "$RULES_DIR" ]; then
-  for src in "$RULES_DIR"/*.md; do
+# core rules
+if [ -d "$CORE_ROOT/rules" ]; then
+  for src in "$CORE_ROOT/rules"/*.md; do
+    [ -f "$src" ] && cp "$src" ~/.claude/rules/
+  done
+fi
+
+# code-review rules (if installed)
+if [ -n "$REVIEW_ROOT" ] && [ -d "$REVIEW_ROOT/rules" ]; then
+  for src in "$REVIEW_ROOT/rules"/*.md; do
     [ -f "$src" ] && cp "$src" ~/.claude/rules/
   done
 fi
@@ -261,7 +285,7 @@ Show and stop:
 
   BROWSER=/bin/false codex login
 
-완료 후 /codex-review-core:setup 을 다시 실행하세요.
+완료 후 /codex-core:setup 을 다시 실행하세요.
 ```
 
 **If "이미 로그인했습니다"**: Proceed to Step 5.
@@ -273,46 +297,52 @@ Show and stop:
 > **⛔ 중요**: 이 단계는 **절대 `~/.claude/CLAUDE.md`를 수정하지 않는다**.
 > CLAUDE.md는 사용자가 수시로 편집하는 파일이라 플러그인이 append/재배치하면
 > 중복·위치 충돌·소유권 모호 문제가 발생한다. 확인만 하고 안내만 한다.
+> (마커 블록 자동 삽입은 플러그인의 install hook이 담당. 이 스킬은 verify만.)
 
 Use the **Read tool** to read `~/.claude/CLAUDE.md`.
 Check which of the following import lines are already present:
 
+**codex-core (필수)**:
 - `@~/.claude/rules/review-protocol.md`
 - `@~/.claude/rules/codex-delegation.md`
-- `@~/.claude/rules/codex-code-review.md`
-- `@~/.claude/rules/codex-red-review.md`
 - `@~/.claude/rules/codex-delegate.md`
 - `@~/.claude/rules/codex-session-ops.md`
 
-**If `review-protocol.md` is already imported**: Show "✓ Rules imported in CLAUDE.md" plus a list of which specific rules are currently active.
+**codex-code-review (선택)**:
+- `@~/.claude/rules/codex-code-review.md`
+- `@~/.claude/rules/codex-red-review.md`
+
+**Legacy markers (v1.x 잔재)**:
+- `<!-- @codex-review-rules:begin -->` ... `<!-- @codex-review-rules:end -->`
+
+**If legacy v1.x marker block is detected**, show:
+```
+⚠️ Legacy 'codex-review-rules' marker block detected in CLAUDE.md.
+   This is from v1.x. The codex-core install hook should remove it automatically.
+   If it persists, remove the block manually (between begin/end markers).
+```
+
+**If `review-protocol.md` is already imported**: Show "✓ codex-core rules imported in CLAUDE.md" plus a list of which specific rules are currently active.
 
 **If `review-protocol.md` is NOT imported**, show this message (no AskUserQuestion, no edit):
 
 ```
-⚠️ CLAUDE.md에 플러그인 rules가 import되어 있지 않습니다.
+⚠️ CLAUDE.md에 codex-core rules가 import되어 있지 않습니다.
+   /plugin install codex-core@sanghyun-io 의 install hook이 자동으로 처리합니다.
 
-다음 내용을 직접 복사해서 ~/.claude/CLAUDE.md 에 추가해주세요.
-필요한 것만 골라 추가하면 됩니다 — review-protocol은 필수, 나머지는 선택입니다.
+수동 추가가 필요한 경우:
 
-  # 필수 (공통 프로토콜 + 자연어 라우터)
+  <!-- @codex-core:begin -->
   @~/.claude/rules/review-protocol.md
   @~/.claude/rules/codex-delegation.md
+  @~/.claude/rules/codex-delegate.md
+  @~/.claude/rules/codex-session-ops.md
+  <!-- @codex-core:end -->
 
-  # 선택 (사용하려는 워크플로만 추가)
-  @~/.claude/rules/codex-code-review.md      # 일반 코드 리뷰
-  @~/.claude/rules/codex-red-review.md       # 공격자 관점 리뷰
-  @~/.claude/rules/codex-delegate.md         # A+ 작업 위임
-  @~/.claude/rules/codex-session-ops.md      # sessions/halt/readout
-```
-
-**If `review-protocol.md` is imported but some of the new rules are missing**, show:
-
-```
-✓ review-protocol.md imported.
-
-ℹ️ 추가로 활성화할 수 있는 rules가 있습니다. 필요한 것만 직접 추가해주세요:
-
-  {missing list}
+  <!-- @codex-code-review:begin -->        # codex-code-review 설치 시
+  @~/.claude/rules/codex-code-review.md
+  @~/.claude/rules/codex-red-review.md
+  <!-- @codex-code-review:end -->
 ```
 
 > **금지**: Edit/Write 도구로 `~/.claude/CLAUDE.md`를 수정하지 말 것.
@@ -326,7 +356,7 @@ Show the final summary:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Codex App Server Plugin — Setup Complete
+✅ codex-core — Setup Complete
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 설치된 항목:
@@ -335,26 +365,26 @@ Show the final summary:
   ✓ ~/.claude/bin/session-lifecycle.mjs
   ✓ ~/.claude/bin/stop-gate.mjs
   ✓ ~/.claude/schemas/review-output.schema.json
-  ✓ ~/.claude/rules/*.md (review-protocol, codex-delegation,
-    codex-code-review, codex-red-review, codex-delegate,
-    codex-session-ops)
+  ✓ ~/.claude/rules/*.md
+    (codex-core: review-protocol, codex-delegation, codex-delegate, codex-session-ops)
+    (codex-code-review (선택): codex-code-review, codex-red-review)
 
-사용 방법:
-  • 코드 리뷰:      /codex-review-rules:code-review
-  • 공격자 리뷰:    /codex-review-rules:red-review
-  • 작업 위임:      /codex-review-rules:delegate <task>
-  • 세션 목록:      /codex-review-rules:sessions
-  • 세션 중단:      /codex-review-rules:halt
-  • 결과 조회:      /codex-review-rules:readout
-  • 설정 재확인:    /codex-review-core:setup
+기본 사용 (codex-core):
+  • 작업 위임:      /codex-core:delegate <task>
+  • 세션 목록:      /codex-core:sessions
+  • 세션 중단:      /codex-core:halt
+  • 결과 조회:      /codex-core:readout
+  • 설정 재확인:    /codex-core:setup
+
+추가 워크플로 (codex-code-review):
+  • 코드 리뷰:      /codex-code-review:code-review
+  • 공격자 리뷰:    /codex-code-review:red-review
 
 자연어 트리거:
-  "Codex에게 리뷰 부탁해" / "Codex에게 이 버그 고쳐달라고 해"
-  같은 자연어도 codex-delegation 라우터가 감지해서 적절한 스킬로
-  연결됩니다. (review-protocol + codex-delegation이 CLAUDE.md에
-  import되어 있어야 동작합니다.)
+  "Codex에게 이 버그 고쳐달라고 해" / "Codex로 gpt-4o 써서 검토 부탁"
+  같은 자연어도 codex-delegation 라우터가 감지해서 적절한 스킬로 연결됩니다.
 
-모델: gpt-5.4 (Stateful Thread 방식, --model 플래그로 오버라이드 가능)
+모델: gpt-5.4 (Stateful Thread, --model 플래그 / CODEX_REVIEW_MODEL 환경변수로 오버라이드)
 브로커: 기본 활성화 (CODEX_REVIEW_NO_BROKER=1 로 비활성화 가능)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
