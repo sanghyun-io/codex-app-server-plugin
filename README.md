@@ -158,8 +158,16 @@ With `codex-delegation.md` imported, Claude auto-routes when you mention Codex i
 | "Codex 세션 뭐 돌아가고 있어?" / "What Codex sessions are running" | `sessions` |
 | "Codex 지금 거 중단해" / "Stop the Codex session" | `halt` |
 | "Codex 그 결과 다시 보여줘" / "Show me that Codex output" | `readout` |
+| "Codex에게 **gpt-4o로** 리뷰 부탁" / "Have Codex review **with gpt-4o**" | `code-review --model gpt-4o` |
+| "**o1 써서** 보안 검토" / "Ask Codex **using o1**" | `red-review --model o1` |
 
 If the intent is ambiguous, Claude asks with an `AskUserQuestion` prompt instead of guessing.
+
+### Model Override
+
+Any skill (code-review, red-review, delegate) accepts `--model <name>` to override the Codex model used for that session. Priority: CLI flag > `CODEX_REVIEW_MODEL` env var > default (`gpt-5.4`).
+
+The natural language router also extracts model names from prefixes like `gpt-*`, `o1*`, `claude-*`, `gemini-*` — see the table above. The selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 
 ### A+ Delegation Pattern
 
@@ -175,18 +183,20 @@ This keeps file writes under Claude's tool-permission control while letting Code
 ### Code Review
 
 ```
-/codex-review-rules:code-review              # Current branch vs default branch
-/codex-review-rules:code-review PR#123       # Review a specific PR
-/codex-review-rules:code-review --base main  # Review against a specific base
-/codex-review-rules:code-review --with-opus  # Add Claude Opus cross-validation
+/codex-review-rules:code-review                  # Current branch vs default branch
+/codex-review-rules:code-review PR#123           # Review a specific PR
+/codex-review-rules:code-review --base main      # Review against a specific base
+/codex-review-rules:code-review --model gpt-4o   # Override Codex model
+/codex-review-rules:code-review --with-opus      # Add Claude Opus cross-validation
 ```
 
 ### Red Review
 
 ```
-/codex-review-rules:red-review               # Adversarial review of current branch
-/codex-review-rules:red-review PR#123        # Adversarial review of a PR
-/codex-review-rules:red-review --with-opus   # Add Claude Opus cross-validation
+/codex-review-rules:red-review                   # Adversarial review of current branch
+/codex-review-rules:red-review PR#123            # Adversarial review of a PR
+/codex-review-rules:red-review --model o1        # Override Codex model
+/codex-review-rules:red-review --with-opus       # Add Claude Opus cross-validation
 ```
 
 ### Delegate
