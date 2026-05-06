@@ -1,5 +1,7 @@
 # codex-app-server-plugin
 
+> 🌐 [한국어](./README.ko.md)
+
 A Claude Code plugin marketplace that integrates the **Codex App Server** with Claude Code. Lets you call Codex (gpt-5.5 by default, configurable) from natural language or slash commands, with stateful threads and cross-turn context reuse.
 
 ## Plugins
