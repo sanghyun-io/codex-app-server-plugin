@@ -94,7 +94,7 @@ The runtime + universal workflows. Installs CLI binary, broker, hook scripts, sc
 
 | Event | Script | Purpose |
 |-------|--------|---------|
-| `Setup` | `scripts/install.sh` | Copies bin/schemas/rules into `~/.claude/`, manages CLAUDE.md marker block, auto-removes legacy v1.x markers |
+| `Setup` | `scripts/install.sh` | Copies bin/schemas/rules into `~/.claude/`, manages CLAUDE.md marker block |
 | `SessionStart` | `session-lifecycle.mjs start` | Exports session metadata for worker coordination |
 | `SessionEnd` | `session-lifecycle.mjs end` | Kills running workers, shuts down broker, cleans temp files |
 | `Stop` | `stop-gate.mjs` | Blocks session stop when reviews are in flight or unreviewed changes exist |
@@ -204,66 +204,6 @@ The install hook adds a separate marker block (`<!-- @codex-code-review:begin --
 /codex-code-review:red-review --with-opus       # Add Claude Opus cross-validation
 ```
 
-## Migration from v1.x
-
-v2.0.0 renames both plugins and reorganizes which plugin owns which features.
-
-### Name changes
-
-| v1.x | v2.0 |
-|------|------|
-| `codex-review-core` | **`codex-core`** |
-| `codex-review-rules` | **`codex-code-review`** |
-
-### Feature relocation
-
-| File / Skill | v1.x location | v2.0 location |
-|--------------|---------------|---------------|
-| `review-protocol.md` | rules | **core** |
-| `codex-delegation.md` | rules | **core** |
-| `codex-delegate.md` | rules | **core** |
-| `codex-session-ops.md` | rules | **core** |
-| `delegate`, `sessions`, `halt`, `readout` skills | rules | **core** |
-| `codex-code-review.md` | rules | code-review |
-| `codex-red-review.md` | rules | code-review |
-| `code-review`, `red-review` skills | rules | code-review |
-
-This means installing **codex-core alone** is now enough to use Codex from Claude Code — natural language, A+ delegation, and session ops all work without `codex-code-review`.
-
-### Slash command changes
-
-| v1.x | v2.0 |
-|------|------|
-| `/codex-review-core:setup` | `/codex-core:setup` |
-| `/codex-review-rules:delegate` | `/codex-core:delegate` |
-| `/codex-review-rules:sessions` | `/codex-core:sessions` |
-| `/codex-review-rules:halt` | `/codex-core:halt` |
-| `/codex-review-rules:readout` | `/codex-core:readout` |
-| `/codex-review-rules:code-review` | `/codex-code-review:code-review` |
-| `/codex-review-rules:red-review` | `/codex-code-review:red-review` |
-
-### Migration steps
-
-```
-# 1. Update marketplace
-/plugin marketplace update sanghyun-io
-
-# 2. Uninstall old plugins
-/plugin uninstall codex-review-core@sanghyun-io
-/plugin uninstall codex-review-rules@sanghyun-io
-
-# 3. Install v2 plugins
-/plugin install codex-core@sanghyun-io
-/plugin install codex-code-review@sanghyun-io   # optional, only if you want code-review workflows
-
-# 4. Verify
-/codex-core:setup
-```
-
-The `codex-core` install hook automatically removes the legacy `<!-- @codex-review-rules:begin -->...<!-- @codex-review-rules:end -->` block from `~/.claude/CLAUDE.md` and replaces it with the new `<!-- @codex-core:begin -->...` block. Your existing CLAUDE.md is backed up to `CLAUDE.md.bak` before any change.
-
-Files in `~/.claude/rules/` keep their names — no rename happens at the file level.
-
 ## Exit Codes
 
 | Code | Meaning | Behavior |
@@ -277,6 +217,10 @@ Files in `~/.claude/rules/` keep their names — no rename happens at the file l
 | 6 | Process error | 1 retry, then skip |
 | 7 | Turn still running | (status command only) |
 | 8 | Turn cancelled | Save partial output |
+
+## Upgrading from v1.x
+
+If you previously installed `codex-review-core` or `codex-review-rules`, see [v1_README.md](./v1_README.md) for plugin renames, feature relocation, slash command changes, and migration steps.
 
 ## License
 
