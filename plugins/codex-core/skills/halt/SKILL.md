@@ -25,3 +25,12 @@ $ARGUMENTS
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
 Run `/codex-core:setup` if you haven't configured the plugin yet.
+
+## Reporting to the User (Plain Language)
+
+When you confirm the cancellation back to the user, use plain, easy words — not hard technical terms. Do NOT use metaphors or analogies; just say the same thing in simpler words.
+
+- Say plainly what was stopped and whether any partial result was kept, in a sentence or two ("진행하던 작업을 멈췄어요. 중간까지 나온 내용은 지우지 않고 남겨뒀습니다").
+- Do NOT surface mechanism words like Thread, threadId, exit code, polling, JSON-RPC, App Server, or state-file names in the user-facing summary at all.
+- If a partial result exists, tell the user in plain words that they can look at it later and which command to use — do not just paste file paths as the main message.
+- Always write the confirmation to the user in Korean.

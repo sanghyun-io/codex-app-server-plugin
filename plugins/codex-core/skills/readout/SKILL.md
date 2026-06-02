@@ -24,3 +24,12 @@ $ARGUMENTS
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
 Run `/codex-core:setup` if you haven't configured the plugin yet.
+
+## Reporting to the User (Plain Language)
+
+When you display the session result to the user, use plain, easy words — not hard technical terms. Do NOT use metaphors or analogies; just say the same thing in simpler words. And do NOT compress everything into one short line — explain enough that the user understands what this session did.
+
+- Start with a plain summary, in a few sentences, of what this session actually found or did, then show the full output.
+- Do NOT surface mechanism words like Thread, threadId, exit code, polling, JSON-RPC, or App Server as the main message. The internal thread ID may appear as an optional reference line, clearly labeled "내부 식별자 (참고용)", not as something the user must act on.
+- Explain the metadata in plain words: which kind of task it was, which model, how many back-and-forth rounds happened, and whether it finished normally or was stopped partway.
+- Always write the summary to the user in Korean.
