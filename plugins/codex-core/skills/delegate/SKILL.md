@@ -35,3 +35,15 @@ $ARGUMENTS
 
 If the rules file is not yet active, ensure it is imported in `~/.claude/CLAUDE.md`.
 Run `/codex-core:setup` if you haven't configured the plugin yet.
+
+## Reporting to the User (Plain Language)
+
+When you report progress or the final result back to the user, use plain, easy words — not hard technical terms. Do NOT use metaphors or analogies; just say the same thing in simpler words. And do NOT compress everything into one short line — explain enough that someone non-technical understands what happened.
+
+- Replace hard terms with everyday words. If a technical term is unavoidable, write it and then add a short plain-words explanation right after it.
+- Do NOT surface mechanism words like Thread, Turn, threadId, exit code, polling, JSON-RPC, App Server, A+ pattern, or `dg_` session prefixes in the user-facing summary at all.
+- Describe each change in a few plain sentences: what was changed, how it was changed, and what the result was — enough that the user can follow along without reading code.
+- If verification (tests/build) ran, say in plain words whether it passed and what that means.
+- If something is blocked or failed, say it plainly and clearly state what you need from the user — do not bury it under status codes or jargon.
+- Keep the raw diff / deep technical detail available, but only show it when the user asks ("diff 보여줘", "자세히").
+- Always write the report to the user in Korean.
