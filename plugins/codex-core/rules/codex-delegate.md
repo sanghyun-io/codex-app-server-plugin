@@ -100,7 +100,7 @@ echo "EXIT_CODE: $?"
 
 ### Step 2: 폴링
 
-review-protocol.md의 **PHASE 1 Step 2**와 동일 (status → 30초 간격, 2분 초과 시 AskUserQuestion).
+review-protocol.md의 **PHASE 1 Step 2**와 동일 (status → 30초 간격, 묻지 않고 계속 대기, 2분마다 진행 안내, 30분 하드 타임아웃까지).
 
 ### Step 3: 결과 수집 및 해석
 
@@ -311,7 +311,7 @@ review-protocol.md의 비동기 실행 규칙을 적용한다:
 - `codex-review` CLI wrapper 사용
 - 비동기 실행: `start`/`follow-up` → `status` 폴링 → 결과 수집
 - Exit code 기반 에러 처리 (review-protocol.md 참조)
-- 2분 초과 시 사용자 알림 (계속/취소/PASS)
+- 묻지 않고 계속 대기, 2분마다 진행 안내 (중단은 사용자가 직접 `/codex-core:halt`)
 
 ### 파일 네이밍 (Delegate 전용)
 

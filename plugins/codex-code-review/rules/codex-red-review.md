@@ -77,7 +77,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude
 `$ARGUMENTS`에 `--model <X>`가 있으면 위 명령 끝에 `--model "<X>"`를 추가한다.
 모델 오버라이드 처리 규칙은 `codex-code-review.md`의 **모델 오버라이드 처리** 섹션을 동일하게 따른다 (start에서 지정한 모델은 `rr_{SID}_state.json`에 저장되어 follow-up에 자동 재사용됨).
 
-폴링 패턴은 code-review와 동일 (30초 간격, 2분 초과 시 AskUserQuestion).
+폴링 패턴은 code-review와 동일 (30초 간격, 묻지 않고 계속 대기, 2분마다 진행 안내, 30분 하드 타임아웃까지).
 
 ### Step 4: 결과 처리
 
