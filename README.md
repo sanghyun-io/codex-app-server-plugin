@@ -74,6 +74,12 @@ CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
 
 The `codex-core` install hook auto-activates rules by appending a marker block to `~/.claude/CLAUDE.md`. The block is idempotent (safe to re-run).
 
+### Updating
+
+When you update the plugin via `/plugin`, the **plugin cache** is refreshed, but the rule files Claude actually reads live at `~/.claude/rules/*.md` (the skills `@import` them from there, not from the cache). The install hook copies them across on update, so in most cases the new rules apply automatically.
+
+> Not strictly required, but **running `/codex-core:setup` once after an update is the safe move.** It diffs the cache against `~/.claude/rules/` and re-copies anything that changed — guaranteeing the latest rules are active even if the hook didn't fire.
+
 ## Plugin: codex-core
 
 The runtime + universal workflows. Installs CLI binary, broker, hook scripts, schemas, the natural language router, A+ delegation, and session operations.
