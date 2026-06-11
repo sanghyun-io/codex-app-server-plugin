@@ -52,6 +52,60 @@ const CANCEL_CHECK_MS = 500;               // 500ms cancel signal polling
 const SELF = fileURLToPath(import.meta.url);
 
 // ---------------------------------------------------------------------------
+// Codex binary resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide how to launch the codex app-server.
+ *
+ * Resolution order:
+ *   1. CODEX_BINARY env — run via `node <bin>` (test fakes / explicit override)
+ *   2. ~/.claude/bin/codex — symlink installed by /codex-core:setup when the
+ *      codex CLI isn't on PATH but a desktop-app binary was found. Using the
+ *      absolute path means it works even if ~/.claude/bin is not on PATH.
+ *   3. PATH `codex` — the normal case (npm -g / standalone installer / brew).
+ *      On Windows we go through `cmd /c codex` so the .ps1/.cmd shim resolves.
+ *
+ * Returns { command, prependArgs, passAppServerArg }:
+ *   - command + prependArgs: how to invoke the process
+ *   - passAppServerArg: whether to append the "app-server" arg. For the
+ *     CODEX_BINARY test fake this is false (it preserves the original
+ *     `node <bin>` invocation, which did NOT pass "app-server"); every real
+ *     codex launch sets it true.
+ */
+function resolveCodexLauncher() {
+  const customBin = process.env.CODEX_BINARY;
+  if (customBin) {
+    return { command: process.execPath, prependArgs: [customBin], passAppServerArg: false };
+  }
+
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (home) {
+    const isWin = process.platform === "win32";
+    // setup symlinks/copies to ~/.claude/bin/codex (or codex.cmd/.exe on Windows)
+    const candidates = isWin
+      ? ["codex.cmd", "codex.exe", "codex.ps1", "codex"]
+      : ["codex"];
+    for (const name of candidates) {
+      const p = resolve(home, ".claude", "bin", name);
+      if (existsSync(p)) {
+        // .ps1 must be run through PowerShell; everything else runs directly.
+        if (p.endsWith(".ps1")) {
+          return { command: "powershell", prependArgs: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", p], passAppServerArg: true };
+        }
+        return { command: p, prependArgs: [], passAppServerArg: true };
+      }
+    }
+  }
+
+  // Fall back to PATH lookup.
+  if (process.platform === "win32") {
+    return { command: "cmd", prependArgs: ["/c", "codex"], passAppServerArg: true };
+  }
+  return { command: "codex", prependArgs: [], passAppServerArg: true };
+}
+
+// ---------------------------------------------------------------------------
 // CodexError
 // ---------------------------------------------------------------------------
 
@@ -81,28 +135,16 @@ class AppServerClient {
 
   async spawn() {
     return new Promise((resolveP, rejectP) => {
-      const customBin = process.env.CODEX_BINARY;
-      if (customBin) {
-        // Custom binary (e.g. fake-codex.mjs for testing)
-        this.proc = spawn(process.execPath, [customBin], {
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-        });
-      } else {
-        const isWin = process.platform === "win32";
-        this.proc = isWin
-          ? spawn("cmd", ["/c", "codex", "app-server"], {
-              stdio: ["pipe", "pipe", "pipe"],
-              windowsHide: true,
-            })
-          : spawn("codex", ["app-server"], {
-              stdio: ["pipe", "pipe", "pipe"],
-            });
-      }
+      const { command, prependArgs, passAppServerArg } = resolveCodexLauncher();
+      const spawnArgs = passAppServerArg ? [...prependArgs, "app-server"] : [...prependArgs];
+      this.proc = spawn(command, spawnArgs, {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
 
       this.proc.on("error", (err) => {
         if (err.code === "ENOENT") {
-          rejectP(new CodexError(1, "codex binary not found. Install with: npm i -g @anthropic-ai/codex"));
+          rejectP(new CodexError(1, "codex binary not found. Install the codex CLI (npm i -g @openai/codex) or run /codex-core:setup to link an installed Codex app."));
         } else {
           rejectP(new CodexError(6, `Process spawn error: ${err.message}`));
         }
