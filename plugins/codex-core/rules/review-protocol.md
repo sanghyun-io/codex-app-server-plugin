@@ -151,7 +151,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 | Exit Code | 상태 | 처리 |
 |:---------:|------|------|
 | 0 | `completed` | **Step 3으로 진행** — 출력 파일 읽기 |
-| 7 | `running` / `initializing` / `queued` | **30초 후 재폴링** (아래 사용자 알림 임계치 참조) |
+| 7 | `running` / `initializing` / `queued` | **30초 후 재폴링** (아래 진행 안내 규칙 참조) |
 | 5 | `timeout_partial` | 부분 출력 저장됨 — Step 3으로 진행 (출력 파일 읽기) |
 | 8 | `cancelled` | 취소됨 — 부분 출력이 있으면 읽기 |
 | 6 | `crashed` / `failed` | 에러 처리 섹션 참조 |
@@ -169,29 +169,25 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 }
 ```
 
-**사용자 알림 임계치**: status에서 `elapsedMs`가 **120초(2분)**를 초과하고 아직 `running`이면,
-**AskUserQuestion**으로 사용자에게 상황을 보고하고 결정을 받는다:
+**진행 안내 규칙**: Codex 요청은 수 분이 걸릴 수 있으므로, **중간에 사용자에게 계속할지 묻지 않고 계속 대기**한다.
+대신 진행 상황만 주기적으로 텍스트로 안내한다.
 
-```json
-{
-  "questions": [{
-    "question": "Codex 리뷰가 {elapsed}초째 진행 중입니다 (현재 {charsReceived}자 수신). 어떻게 할까요?",
-    "header": "Review Progress",
-    "multiSelect": false,
-    "options": [
-      {"label": "계속 대기", "description": "리뷰가 완료될 때까지 기다립니다 (30초 후 다시 확인)"},
-      {"label": "취소 후 부분 결과 사용", "description": "현재까지 수신된 내용으로 진행합니다"},
-      {"label": "PASS", "description": "리뷰를 건너뛰고 다음 단계로 진행합니다"}
-    ]
-  }]
-}
-```
+| 항목 | 규칙 |
+|------|------|
+| 폴링 간격 | **30초** (변함없음 — exit 7이면 계속 재폴링) |
+| 진행 안내 주기 | **2분(120초)마다 1회**, 한 줄로 경과 시간과 수신량을 안내 |
+| 안내 형식 | `Codex 진행 중 — {elapsed}초 경과, {charsReceived}자 수신` (예: `Codex 진행 중 — 240초 경과, 5,120자 수신`) |
+| 종료 조건 | `status`가 exit 0(completed) 또는 exit 5(timeout_partial)를 반환할 때까지 폴링 지속 |
+| 하드 타임아웃 | **30분 safety net 유지** — `status`가 exit 5(`timeout_partial`)를 반환하면 부분 출력으로 Step 3 진행 |
 
-> **"계속 대기" 선택 시**: 30초 후 다시 status를 확인한다. 이후 **60초마다** 재알림한다.
-> **"취소 후 부분 결과 사용" 선택 시**: `cancel` 명령 실행 → 부분 출력 파일 읽기 → PHASE 3 진행.
-> **"PASS" 선택 시**: `cancel` 명령 실행 → 검증 스킵.
+> **⛔ AskUserQuestion 금지**: 대기 시간이 길다는 이유만으로 사용자에게 계속/취소/PASS를 묻지 않는다.
+> 사용자가 멈추고 싶으면 직접 `/codex-core:halt`(또는 `/codex-core:sessions`로 확인 후 halt)를 호출하거나 세션에 개입한다.
+> 이때 partial 출력과 thread state는 보존된다.
 
-**취소 명령**:
+> **안내 주기 운용**: 폴링은 30초마다 돌지만, 진행 안내 텍스트는 누적 경과가 **120초의 배수에 도달했을 때만** 1줄 출력한다
+> (240초, 360초, 480초 ... 30분까지). 30초 폴링마다 매번 출력하지 않는다.
+
+**취소 명령** (사용자가 직접 중단을 요청했을 때만):
 ```bash
 node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" cancel --session "cr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp"
 ```
@@ -247,8 +243,8 @@ echo "EXIT_CODE: $?"
 
 PHASE 1 Step 2와 **동일한 폴링 패턴**을 사용한다:
 - 30초 간격으로 `status` 명령 호출
-- 2분 초과 시 AskUserQuestion으로 사용자 알림
-- 완료 시 출력 파일 읽기
+- 묻지 않고 계속 대기, 2분(120초)마다 진행 상황만 1줄 안내
+- 완료(exit 0) 또는 30분 하드 타임아웃(exit 5)까지 폴링 지속 → 출력 파일 읽기
 
 #### Step 3: 결과 수집
 
@@ -541,7 +537,7 @@ After all issues, provide:
 | Exit Code | 의미 | 처리 |
 |:---------:|------|------|
 | 0 | 완료 (`completed`) | 출력 파일 읽기 → PHASE 3 진행 |
-| 7 | 실행 중 (`running` / `initializing` / `queued`) | 30초 후 재폴링 (2분 초과 시 사용자 알림) |
+| 7 | 실행 중 (`running` / `initializing` / `queued`) | 30초 후 재폴링 (묻지 않고 계속 대기, 2분마다 진행 안내) |
 | 5 | 타임아웃 (`timeout_partial`, 30분 safety net) | 부분 출력 읽기 → PHASE 3 진행 |
 | 8 | 취소됨 (`cancelled`) | 부분 출력이 있으면 읽기 |
 | 1 | codex 바이너리 없음 | 즉시 PASS |
@@ -561,7 +557,7 @@ After all issues, provide:
 codex-review start → exit 0 (워커 시작됨)
   │
   ├─ status 폴링 루프 (30초 간격)
-  │   ├─ exit 7 → 실행 중 → 계속 대기 (2분 초과 시 사용자 알림)
+  │   ├─ exit 7 → 실행 중 → 묻지 않고 계속 대기 (2분마다 진행 안내, 30분 하드 타임아웃까지)
   │   ├─ exit 0 → 완료 → 출력 파일 읽기 → PHASE 3
   │   ├─ exit 5 → 타임아웃 → 부분 출력 읽기 → PHASE 3
   │   ├─ exit 8 → 취소됨 → 부분 출력 있으면 읽기

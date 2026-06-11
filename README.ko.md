@@ -74,6 +74,12 @@ CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
 
 `codex-core` install hook은 `~/.claude/CLAUDE.md`에 마커 블록을 append하여 규칙을 자동 활성화합니다. 블록은 idempotent하므로 재실행해도 안전합니다.
 
+### 업데이트
+
+`/plugin`으로 플러그인을 업데이트하면 **플러그인 캐시**가 갱신됩니다. 단, Claude가 실제로 읽는 규칙 파일은 `~/.claude/rules/*.md`에 있고(스킬이 캐시가 아니라 이곳에서 `@import`합니다), install hook이 업데이트 시 이곳으로 복사하므로 대부분의 경우 새 규칙이 자동으로 적용됩니다.
+
+> 반드시 필요한 것은 아니지만, **업데이트 후 `/codex-core:setup`을 한 번 실행하면 안전합니다.** 캐시와 `~/.claude/rules/`를 비교(diff)하여 변경된 파일만 다시 복사하므로, hook이 실행되지 않았더라도 최신 규칙이 확실히 활성화됩니다.
+
 ## Plugin: codex-core
 
 런타임 + 범용 워크플로. CLI 바이너리, broker, hook 스크립트, 스키마, 자연어 라우터, A+ 위임, 세션 운영을 설치합니다.
