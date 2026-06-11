@@ -237,12 +237,73 @@ echo "PATH=$CODEX_PATH VER=$CODEX_VER"
 - Stop and wait for user to reinstall, then re-run setup.
 
 **If NOT_FOUND**:
-Ask the user using AskUserQuestion:
+The codex CLI isn't on PATH. Before asking the user to install it, **try to auto-discover an existing Codex binary** (e.g. installed by the Codex desktop app, Homebrew cask, or the standalone installer) and symlink it into `~/.claude/bin/codex` — the plugin runtime checks that path directly, so no PATH change is needed.
+
+> **⛔ 경로 추측 금지**: OpenAI 공식 문서는 OS별 Codex 앱 바이너리 경로를 명시하지 않는다.
+> 아래는 표준 설치구(standalone installer / Homebrew cask / GitHub release)가 흔히 쓰는 **후보 경로 + 동적 탐색**이다.
+> **존재하고 실행 가능한 것만** symlink한다. 하나도 못 찾으면 추측해서 만들지 말고 npm 설치 안내로 넘어간다.
+
+Run the auto-discovery with Bash:
+
+```bash
+FOUND=""
+
+# 1) macOS: Spotlight로 Codex.app 동적 탐색 후, 번들 내부 codex 바이너리 추적
+if [ "$(uname)" = "Darwin" ]; then
+  APP=$(mdfind "kMDItemCFBundleIdentifier == 'com.openai.codex'" 2>/dev/null | head -1)
+  [ -z "$APP" ] && APP=$(mdfind -name "Codex.app" 2>/dev/null | grep -i '/Codex.app$' | head -1)
+  if [ -n "$APP" ]; then
+    # 번들 안에서 실행 가능한 codex 바이너리 탐색 (Resources/MacOS 등 위치 변동 대비)
+    FOUND=$(find "$APP" -type f \( -name "codex" -o -name "codex-*-apple-darwin" \) -perm -u+x 2>/dev/null | head -1)
+  fi
+fi
+
+# 2) 후보 경로 목록 (mac/linux 공통 — standalone installer / homebrew cask / 수동 설치)
+if [ -z "$FOUND" ]; then
+  for cand in \
+    "$HOME/.codex/bin/codex" \
+    "$HOME/.local/bin/codex" \
+    "/opt/homebrew/bin/codex" \
+    "/usr/local/bin/codex" \
+    "/opt/codex/bin/codex" \
+    "/opt/codex/codex" ; do
+    if [ -x "$cand" ]; then FOUND="$cand"; break; fi
+  done
+fi
+
+# 3) Windows: where.exe + 흔한 설치 경로 (Git Bash/WSL 가정). MS Store 격리본은 symlink 부적합 → 발견 못하면 npm 안내로.
+if [ -z "$FOUND" ] && command -v where.exe >/dev/null 2>&1; then
+  W=$(where.exe codex.exe 2>/dev/null | head -1 | tr -d '\r')
+  [ -n "$W" ] && [ -f "$W" ] && FOUND="$W"
+fi
+
+if [ -n "$FOUND" ]; then
+  echo "DISCOVERED: $FOUND"
+  # 실행 검증 — 진짜 codex인지 --version으로 확인
+  "$FOUND" --version >/dev/null 2>&1 && echo "RUNNABLE: yes" || echo "RUNNABLE: no"
+else
+  echo "DISCOVERED: none"
+fi
+```
+
+**If `DISCOVERED` is a path and `RUNNABLE: yes`** — symlink it and confirm:
+
+```bash
+mkdir -p ~/.claude/bin
+ln -sf "$FOUND" ~/.claude/bin/codex 2>/dev/null \
+  || cp "$FOUND" ~/.claude/bin/codex   # symlink 불가 환경(일부 Windows)에서는 복사로 대체
+chmod +x ~/.claude/bin/codex 2>/dev/null
+~/.claude/bin/codex --version && echo "✓ Linked existing Codex binary → ~/.claude/bin/codex"
+```
+
+Then show "✓ codex 바이너리를 찾아 연결했습니다 (`{FOUND}` → ~/.claude/bin/codex)" and proceed to Step 4. **Do not ask about npm install** — codex is now resolvable.
+
+**If `DISCOVERED: none` (or `RUNNABLE: no`)** — fall back to asking the user:
 
 ```json
 {
   "questions": [{
-    "question": "codex CLI가 설치되어 있지 않습니다. 어떻게 하시겠어요?",
+    "question": "codex CLI가 설치되어 있지 않고, 설치된 Codex 앱 바이너리도 찾지 못했습니다. 어떻게 하시겠어요?",
     "header": "codex CLI",
     "multiSelect": false,
     "options": [
@@ -368,6 +429,7 @@ Show the final summary:
   ✓ ~/.claude/rules/*.md
     (codex-core: review-protocol, codex-delegation, codex-delegate, codex-session-ops)
     (codex-code-review (선택): codex-code-review, codex-red-review)
+  ✓ ~/.claude/bin/codex   ← (Step 3에서 기존 Codex 앱/바이너리를 찾아 연결한 경우에만 표시)
 
 기본 사용 (codex-core):
   • 작업 위임:      /codex-core:delegate <task>

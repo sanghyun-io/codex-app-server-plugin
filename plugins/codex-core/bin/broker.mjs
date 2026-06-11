@@ -82,6 +82,45 @@ function isTurnScopedMethod(method) {
 }
 
 // ---------------------------------------------------------------------------
+// Codex binary resolution (mirrors codex-review.mjs resolveCodexLauncher)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide how to launch the codex app-server.
+ *   1. CODEX_BINARY env — run via `node <bin>` (test fakes / explicit override)
+ *   2. ~/.claude/bin/codex — symlink installed by /codex-core:setup
+ *   3. PATH `codex` (Windows via `cmd /c codex`)
+ */
+function resolveCodexLauncher() {
+  const customBin = process.env.CODEX_BINARY;
+  if (customBin) {
+    // Preserve original test-fake invocation: `node <bin>` with no "app-server" arg.
+    return { command: process.execPath, prependArgs: [customBin], passAppServerArg: false };
+  }
+
+  if (HOME) {
+    const isWin = process.platform === "win32";
+    const candidates = isWin
+      ? ["codex.cmd", "codex.exe", "codex.ps1", "codex"]
+      : ["codex"];
+    for (const name of candidates) {
+      const p = resolve(HOME, ".claude", "bin", name);
+      if (existsSync(p)) {
+        if (p.endsWith(".ps1")) {
+          return { command: "powershell", prependArgs: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", p], passAppServerArg: true };
+        }
+        return { command: p, prependArgs: [], passAppServerArg: true };
+      }
+    }
+  }
+
+  if (process.platform === "win32") {
+    return { command: "cmd", prependArgs: ["/c", "codex"], passAppServerArg: true };
+  }
+  return { command: "codex", prependArgs: [], passAppServerArg: true };
+}
+
+// ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
 
@@ -113,23 +152,12 @@ class AppServerConnection {
 
   async start() {
     return new Promise((resolveP, rejectP) => {
-      const customBin = process.env.CODEX_BINARY;
-      if (customBin) {
-        this.proc = spawn(process.execPath, [customBin], {
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-        });
-      } else {
-        const isWin = process.platform === "win32";
-        this.proc = isWin
-          ? spawn("cmd", ["/c", "codex", "app-server"], {
-              stdio: ["pipe", "pipe", "pipe"],
-              windowsHide: true,
-            })
-          : spawn("codex", ["app-server"], {
-              stdio: ["pipe", "pipe", "pipe"],
-            });
-      }
+      const { command, prependArgs, passAppServerArg } = resolveCodexLauncher();
+      const spawnArgs = passAppServerArg ? [...prependArgs, "app-server"] : [...prependArgs];
+      this.proc = spawn(command, spawnArgs, {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
 
       this.proc.on("error", (err) => {
         if (err.code === "ENOENT") {
