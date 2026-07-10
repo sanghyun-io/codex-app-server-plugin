@@ -44,9 +44,11 @@ function cli(args, opts = {}) {
     FAKE_MODEL_LIST_UNSUPPORTED: opts.modelListUnsupported ? "1" : "",
     FAKE_TURN_START_REJECT: opts.turnStartReject ?? "",
     FAKE_INTERRUPT_LOG: opts.interruptLog ?? "",
+    FAKE_INTERRUPT_DELAY_MS: opts.interruptDelay ? String(opts.interruptDelay) : "",
     FAKE_FOREIGN_DELTA: opts.foreignDelta ? "1" : "",
     CODEX_REVIEW_TEST_MODE: opts.testMode ? "1" : "",
     CODEX_REVIEW_HEARTBEAT_MS: opts.heartbeatMs ? String(opts.heartbeatMs) : "",
+    CODEX_REVIEW_INTERRUPT_GRACE_MS: opts.interruptGrace ? String(opts.interruptGrace) : "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -314,7 +316,9 @@ describe("background mode", () => {
         completed = progress;
         break;
       }
-      assert.equal(result.exit, 7, result.stderr);
+      const workerLog = resolve(TEST_DIR, `${sid}_worker.log`);
+      const diagnostics = existsSync(workerLog) ? readFileSync(workerLog, "utf8") : "no worker log";
+      assert.equal(result.exit, 7, `${result.stderr}\n${diagnostics}`);
     }
 
     assert.ok(observed.has("waiting_first_output"), [...observed].join(", "));
@@ -660,9 +664,15 @@ describe("broker turn multiplexing", () => {
     assert.doesNotMatch(readFileSync(outputPath, "utf8"), /FOREIGN_NOTIFICATION/);
   });
 
-  it("reattaches after a broker disconnect without duplicating output", async () => {
+  it("reattaches after a broker disconnect without duplicating output", async (t) => {
     const reconnectHome = resolve(TEST_DIR, `reconnect_home_${Date.now()}`);
     mkdirSync(resolve(reconnectHome, ".claude", "tmp"), { recursive: true });
+    t.after(() => {
+      const port = readJson(resolve(reconnectHome, ".claude", "tmp", "broker.port"));
+      if (port?.pid) {
+        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
+      }
+    });
     const sid = newSid();
     const promptPath = resolve(TEST_DIR, `${sid}_reattach_p.txt`);
     const outputPath = resolve(TEST_DIR, `${sid}_reattach_o.txt`);
@@ -686,7 +696,9 @@ describe("broker turn multiplexing", () => {
     assert.equal(started.exit, 0, started.stderr);
 
     let progress;
-    const deadline = Date.now() + 10_000;
+    // Cold broker startup itself permits up to 15s; allow that contract plus
+    // loaded-Windows scheduling overhead before requiring the turn id.
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       await sleep(100);
       const status = cli(
@@ -696,7 +708,12 @@ describe("broker turn multiplexing", () => {
       progress = JSON.parse(status.stdout);
       if (progress.turnId) break;
     }
-    assert.ok(progress?.turnId, "turn id was not published to progress");
+    const workerLog = resolve(TEST_DIR, `${sid}_worker.log`);
+    const diagnostics = existsSync(workerLog) ? readFileSync(workerLog, "utf8") : "no worker log";
+    assert.ok(
+      progress?.turnId,
+      `turn id was not published to progress: ${JSON.stringify(progress)} / ${diagnostics}`
+    );
 
     await brokerControl(reconnectHome, "test/disconnect-turn", {
       threadId: progress.threadId,
@@ -709,10 +726,6 @@ describe("broker turn multiplexing", () => {
     const output = readFileSync(outputPath, "utf8");
     for (const marker of markers) {
       assert.equal(output.split(marker).length - 1, 1, `${marker} was duplicated or missing`);
-    }
-    const reconnectPort = readJson(resolve(reconnectHome, ".claude", "tmp", "broker.port"));
-    if (reconnectPort?.pid) {
-      try { process.kill(reconnectPort.pid, "SIGTERM"); } catch { /* already stopped */ }
     }
   });
 
@@ -745,14 +758,19 @@ describe("broker turn multiplexing", () => {
     assert.equal(started.exit, 0, started.stderr);
 
     let progress;
-    const startDeadline = Date.now() + 10_000;
+    const startDeadline = Date.now() + 20_000;
     while (Date.now() < startDeadline) {
       await sleep(50);
       const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
       progress = JSON.parse(status.stdout);
       if (progress.turnId) break;
     }
-    assert.ok(progress?.turnId, "turn id was not published");
+    const workerLog = resolve(TEST_DIR, `${sid}_worker.log`);
+    const diagnostics = existsSync(workerLog) ? readFileSync(workerLog, "utf8") : "no worker log";
+    assert.ok(
+      progress?.turnId,
+      `turn id was not published: ${JSON.stringify(progress)} / ${diagnostics}`
+    );
 
     await brokerControl(home, "test/set-drop-pings", { drop: true });
     const reconnectDeadline = Date.now() + 5_000;
@@ -770,9 +788,15 @@ describe("broker turn multiplexing", () => {
     assert.match(readFileSync(outputPath, "utf8"), /Heartbeat recovery output/);
   });
 
-  it("fails promptly with partial output and no replay after app server exit", async () => {
+  it("fails promptly with partial output and no replay after app server exit", async (t) => {
     const crashHome = resolve(TEST_DIR, `crash_home_${Date.now()}`);
     mkdirSync(resolve(crashHome, ".claude", "tmp"), { recursive: true });
+    t.after(() => {
+      const port = readJson(resolve(crashHome, ".claude", "tmp", "broker.port"));
+      if (port?.pid) {
+        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
+      }
+    });
     const sid = newSid();
     const promptPath = resolve(TEST_DIR, `${sid}_crash_p.txt`);
     const outputPath = resolve(TEST_DIR, `${sid}_crash_o.txt`);
@@ -798,7 +822,7 @@ describe("broker turn multiplexing", () => {
     assert.equal(started.exit, 0, started.stderr);
 
     let progress;
-    const streamDeadline = Date.now() + 10_000;
+    const streamDeadline = Date.now() + 20_000;
     while (Date.now() < streamDeadline) {
       await sleep(150);
       const status = cli(
@@ -832,9 +856,15 @@ describe("broker turn multiplexing", () => {
     assert.equal(requestsByMethod(requestLog, "turn/start").length, 1);
   });
 
-  it("cancel interrupts the upstream turn exactly once", async () => {
+  it("cancel interrupts the upstream turn exactly once", async (t) => {
     const home = resolve(TEST_DIR, `cancel_home_${Date.now()}`);
     mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
+    t.after(() => {
+      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
+      if (port?.pid) {
+        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
+      }
+    });
     const sid = newSid();
     const prompt = resolve(TEST_DIR, `${sid}_interrupt_p.txt`);
     const output = resolve(TEST_DIR, `${sid}_interrupt_o.txt`);
@@ -853,7 +883,7 @@ describe("broker turn multiplexing", () => {
     assert.equal(started.exit, 0, started.stderr);
 
     let running;
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       await sleep(100);
       const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
@@ -867,6 +897,58 @@ describe("broker turn multiplexing", () => {
     const interrupts = readRequests(interruptLog);
     assert.deepEqual(interrupts, [{ threadId: running.threadId, turnId: running.turnId }]);
   });
+
+  it("close gracefully interrupts an active Windows worker", async (t) => {
+    const home = resolve(TEST_DIR, `close_home_${Date.now()}`);
+    mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
+    t.after(() => {
+      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
+      if (port?.pid) {
+        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
+      }
+    });
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_close_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_close_o.txt`);
+    const interruptLog = resolve(TEST_DIR, `${sid}_close_interrupt.jsonl`);
+    writeFileSync(prompt, "Close this active turn gracefully.", "utf8");
+
+    const started = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home,
+      turnDelay: 5000,
+      interruptLog,
+      interruptDelay: 2000,
+      interruptGrace: 250,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let running;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      await sleep(50);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      running = JSON.parse(status.stdout);
+      if (running.turnId) break;
+    }
+    assert.ok(running?.turnId, `turn id was not published: ${JSON.stringify(running)}`);
+
+    const closed = cli(
+      ["close", "--session", sid, "--review-dir", TEST_DIR],
+      { broker: true, home, interruptGrace: 250 }
+    );
+    assert.equal(closed.exit, 0, closed.stderr);
+    assert.deepEqual(readRequests(interruptLog), [{
+      threadId: running.threadId,
+      turnId: running.turnId,
+    }]);
+    assert.ok(!existsSync(resolve(TEST_DIR, `${sid}_state.json`)));
+    assert.ok(!existsSync(resolve(TEST_DIR, `${sid}_progress.json`)));
+  });
 });
 
 describe("upstream timeout interruption", () => {
@@ -877,6 +959,7 @@ describe("upstream timeout interruption", () => {
     const interruptLog = resolve(TEST_DIR, `${sid}_timeout_interrupt.jsonl`);
     writeFileSync(prompt, "Produce one partial chunk, then time out.", "utf8");
 
+    const startedAt = Date.now();
     const result = cli([
       "start", prompt, output,
       "--session", sid,
@@ -888,9 +971,13 @@ describe("upstream timeout interruption", () => {
       deltaInterval: 1000,
       turnText: `${"P".repeat(120)}\n\n[VERDICT] - APPROVE`,
       interruptLog,
+      interruptDelay: 2000,
+      interruptGrace: 250,
     });
+    const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.exit, 5, result.stderr);
+    assert.ok(elapsedMs < 1200, `interrupt grace waited for acknowledgement: ${elapsedMs}ms`);
     const state = readJson(resolve(TEST_DIR, `${sid}_state.json`));
     const interrupts = readRequests(interruptLog);
     assert.equal(interrupts.length, 1);

@@ -49,6 +49,10 @@ const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
 const CANCEL_CHECK_MS = 500;               // 500ms cancel signal polling
+const INTERRUPT_GRACE_MS = Math.max(
+  50,
+  Number(process.env.CODEX_REVIEW_INTERRUPT_GRACE_MS) || 5_000,
+);
 const LARGE_PROMPT_CHARS = 131_072;
 const ACTIVE_PROGRESS_STATUSES = new Set([
   "queued",
@@ -333,15 +337,14 @@ class AppServerClient {
         }
         interruptSent = true;
         interruptReason = reason;
+        interruptGraceTimer = setTimeout(() => {
+          finish({ text: agentText, status: interruptReason, interruptError });
+        }, INTERRUPT_GRACE_MS);
         try {
           await this.interruptTurn(threadId, turnId);
         } catch (error) {
           interruptError = extractAppServerErrorMessage(error);
         }
-        if (resolved) return;
-        interruptGraceTimer = setTimeout(() => {
-          finish({ text: agentText, status: interruptReason, interruptError });
-        }, 5000);
       };
 
       // Hard timeout (safety net)
@@ -731,15 +734,14 @@ class BrokerClient {
         }
         interruptSent = true;
         interruptReason = reason;
+        interruptGraceTimer = setTimeout(() => {
+          finish({ text: agentText, status: interruptReason, interruptError });
+        }, INTERRUPT_GRACE_MS);
         try {
           await this.interruptTurn(threadId, turnId);
         } catch (error) {
           interruptError = extractAppServerErrorMessage(error);
         }
-        if (resolved) return;
-        interruptGraceTimer = setTimeout(() => {
-          finish({ text: agentText, status: interruptReason, interruptError });
-        }, 5000);
       };
 
       const hardTimer = timeoutMs > 0
@@ -1171,6 +1173,7 @@ async function workerMain(parsed) {
     saveProgress(reviewDir, sessionId, {
       ...progressContext,
       status,
+      updatedAt: new Date().toISOString(),
       elapsedMs: Date.now() - startMs,
     });
   };
@@ -1384,6 +1387,7 @@ function spawnWorker(parsed) {
   saveProgress(reviewDir, sessionId, {
     status: "queued",
     startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     elapsedMs: 0,
     charsReceived: 0,
   });
@@ -1504,7 +1508,10 @@ function cmdStatus(parsed) {
   const pidAlive = pid ? isOurWorker(pid, pidData?.nonce) : false;
 
   // Detect crashed worker
-  if (!pidAlive && ACTIVE_PROGRESS_STATUSES.has(progress.status)) {
+  const progressUpdatedAt = new Date(progress.updatedAt || progress.startedAt || 0).getTime();
+  const progressRecentlyUpdated = Number.isFinite(progressUpdatedAt)
+    && Date.now() - progressUpdatedAt < PROGRESS_INTERVAL_MS * 2;
+  if (!pidAlive && ACTIVE_PROGRESS_STATUSES.has(progress.status) && !progressRecentlyUpdated) {
     progress.status = "crashed";
     progress.error = "Worker process exited unexpectedly";
     // Check worker log for details
@@ -1584,8 +1591,9 @@ async function cmdCancel(parsed) {
   writeFileSync(fp.cancel(reviewDir, sessionId), new Date().toISOString(), "utf8");
   log(`Cancellation requested for worker (PID: ${pid})`);
 
-  // Wait for graceful exit (up to 5s)
-  for (let i = 0; i < 25; i++) {
+  // Allow cancel polling plus the full upstream interrupt grace period.
+  const gracefulDeadline = Date.now() + INTERRUPT_GRACE_MS + CANCEL_CHECK_MS + 1500;
+  while (Date.now() < gracefulDeadline) {
     if (!isAlive(pid)) break;
     await sleep(200);
   }
@@ -1626,8 +1634,11 @@ async function cmdClose(parsed) {
   // Kill worker if still running (with identity verification)
   const pidData = readPidFile(reviewDir, sessionId);
   if (pidData && isOurWorker(pidData.pid, pidData.nonce)) {
-    try { process.kill(pidData.pid, "SIGTERM"); } catch { /* ignore */ }
-    await sleep(1000);
+    writeFileSync(fp.cancel(reviewDir, sessionId), new Date().toISOString(), "utf8");
+    const gracefulDeadline = Date.now() + INTERRUPT_GRACE_MS + CANCEL_CHECK_MS + 1500;
+    while (Date.now() < gracefulDeadline && isAlive(pidData.pid)) {
+      await sleep(200);
+    }
     if (isAlive(pidData.pid)) {
       try { process.kill(pidData.pid, "SIGKILL"); } catch { /* ignore */ }
     }

@@ -29,6 +29,7 @@ const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
 const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
 const REQUEST_LOG = process.env.FAKE_REQUEST_LOG || "";
 const INTERRUPT_LOG = process.env.FAKE_INTERRUPT_LOG || "";
+const INTERRUPT_DELAY_MS = parseInt(process.env.FAKE_INTERRUPT_DELAY_MS || "0", 10);
 const FOREIGN_DELTA = !!process.env.FAKE_FOREIGN_DELTA;
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.6-sol",
@@ -203,14 +204,16 @@ function handleRequest(msg) {
     case "turn/interrupt":
       interruptedTurns.add(params.turnId);
       recordInterrupt(params);
-      send({ id, result: {} });
-      send({
-        method: "turn/completed",
-        params: {
-          threadId: params.threadId,
-          turn: { id: params.turnId, status: "interrupted", items: [], error: null },
-        },
-      });
+      setTimeout(() => {
+        send({ id, result: {} });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId: params.threadId,
+            turn: { id: params.turnId, status: "interrupted", items: [], error: null },
+          },
+        });
+      }, INTERRUPT_DELAY_MS);
       break;
 
     default:
