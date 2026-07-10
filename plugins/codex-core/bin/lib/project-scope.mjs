@@ -23,6 +23,7 @@ export function resolveProjectRoot(cwd) {
       cwd: start,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).trim();
     return canonical(root);
   } catch {

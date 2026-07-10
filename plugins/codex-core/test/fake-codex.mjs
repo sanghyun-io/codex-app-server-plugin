@@ -45,6 +45,7 @@ const rl = createInterface({ input: process.stdin });
 
 let threadCounter = 0;
 let turnCounter = 0;
+const interruptedTurns = new Set();
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
@@ -142,6 +143,7 @@ function handleRequest(msg) {
       });
 
       setTimeout(() => {
+        if (interruptedTurns.has(turnId)) return;
         if (TURN_FAIL) {
           send({
             method: "turn/completed",
@@ -173,6 +175,7 @@ function handleRequest(msg) {
         let delay = 0;
         for (const chunk of chunks) {
           setTimeout(() => {
+            if (interruptedTurns.has(turnId)) return;
             send({
               method: "item/agentMessage/delta",
               params: { threadId, turnId, itemId: `item-${turnId}`, delta: chunk },
@@ -183,6 +186,7 @@ function handleRequest(msg) {
 
         // Send completion after all deltas
         setTimeout(() => {
+          if (interruptedTurns.has(turnId)) return;
           send({
             method: "turn/completed",
             params: {
@@ -197,6 +201,7 @@ function handleRequest(msg) {
     }
 
     case "turn/interrupt":
+      interruptedTurns.add(params.turnId);
       recordInterrupt(params);
       send({ id, result: {} });
       send({

@@ -55,6 +55,7 @@ function cli(args, opts = {}) {
     const stdout = execFileSync(process.execPath, [CLI, ...args], {
       env, cwd: opts.cwd, timeout: opts.timeout ?? 15_000, encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     return { exit: 0, stdout, stderr: "" };
   } catch (err) {
@@ -164,7 +165,7 @@ describe("project binding", () => {
     reviewDir = resolve(root, "reviews");
     for (const repo of [repoA, repoB]) {
       mkdirSync(repo, { recursive: true });
-      execFileSync("git", ["init", "--quiet"], { cwd: repo });
+      execFileSync("git", ["init", "--quiet"], { cwd: repo, windowsHide: true });
     }
     mkdirSync(reviewDir, { recursive: true });
   });
@@ -436,7 +437,31 @@ describe("broker turn multiplexing", () => {
   const BROKER_PORT_FILE = resolve(BROKER_TMP, "broker.port");
 
   before(() => {
+    if (existsSync(BROKER_PORT_FILE)) {
+      try {
+        const stale = readJson(BROKER_PORT_FILE);
+        if (stale?.pid) process.kill(stale.pid, "SIGTERM");
+      } catch { /* already stopped */ }
+    }
+    rmSync(BROKER_HOME, { recursive: true, force: true });
     mkdirSync(BROKER_TMP, { recursive: true });
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_broker_warmup_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_broker_warmup_o.txt`);
+    writeFileSync(prompt, "Warm the broker for concurrency timing.", "utf8");
+    const warmed = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+    ], {
+      broker: true,
+      home: BROKER_HOME,
+      tagThread: true,
+      turnDelay: 900,
+      turnText: "Warm broker output.\n\n[VERDICT] - APPROVE",
+    });
+    assert.equal(warmed.exit, 0, warmed.stderr);
   });
 
   after(() => {
@@ -460,7 +485,7 @@ describe("broker turn multiplexing", () => {
         { broker: true, home }
       );
       if (r.exit === 0) return JSON.parse(r.stdout);
-      if (![7].includes(r.exit)) throw new Error(`status exit ${r.exit}: ${r.stderr}`);
+      if (![7].includes(r.exit)) throw new Error(`status exit ${r.exit}: ${r.stderr || r.stdout}`);
     }
     throw new Error(`Session ${sid} did not complete within ${timeoutMs}ms`);
   }
@@ -690,6 +715,73 @@ describe("broker turn multiplexing", () => {
     assert.ok(existsSync(outputPath), "partial output file was not written");
     assert.ok(readFileSync(outputPath, "utf8").length > 0, "partial output was empty");
     assert.equal(requestsByMethod(requestLog, "turn/start").length, 1);
+  });
+
+  it("cancel interrupts the upstream turn exactly once", async () => {
+    const home = resolve(TEST_DIR, `cancel_home_${Date.now()}`);
+    mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_interrupt_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_interrupt_o.txt`);
+    const interruptLog = resolve(TEST_DIR, `${sid}_interrupt.jsonl`);
+    writeFileSync(prompt, "Run until cancelled.", "utf8");
+    const started = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home,
+      turnDelay: 5000,
+      interruptLog,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let running;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      await sleep(100);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      running = JSON.parse(status.stdout);
+      if (running.turnId) break;
+    }
+    assert.ok(running?.turnId, "turn id was not published");
+
+    const cancelled = cli(["cancel", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+    assert.equal(cancelled.exit, 0, cancelled.stderr);
+    const interrupts = readRequests(interruptLog);
+    assert.deepEqual(interrupts, [{ threadId: running.threadId, turnId: running.turnId }]);
+  });
+});
+
+describe("upstream timeout interruption", () => {
+  it("hard timeout interrupts the upstream turn exactly once", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_timeout_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_timeout_o.txt`);
+    const interruptLog = resolve(TEST_DIR, `${sid}_timeout_interrupt.jsonl`);
+    writeFileSync(prompt, "Produce one partial chunk, then time out.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--timeout", "250",
+    ], {
+      turnDelay: 100,
+      deltaInterval: 1000,
+      turnText: `${"P".repeat(120)}\n\n[VERDICT] - APPROVE`,
+      interruptLog,
+    });
+
+    assert.equal(result.exit, 5, result.stderr);
+    const state = readJson(resolve(TEST_DIR, `${sid}_state.json`));
+    const interrupts = readRequests(interruptLog);
+    assert.equal(interrupts.length, 1);
+    assert.equal(interrupts[0].threadId, state.threadId);
+    assert.ok(interrupts[0].turnId);
+    assert.ok(existsSync(output));
   });
 });
 

@@ -123,7 +123,10 @@ function main() {
 
   // Check 3: Uncommitted changes that may need review
   try {
-    const status = execSync("git status --porcelain 2>/dev/null", { encoding: "utf8" }).trim();
+    const status = execSync("git status --porcelain 2>/dev/null", {
+      encoding: "utf8",
+      windowsHide: true,
+    }).trim();
     if (status) {
       const lineCount = status.split("\n").length;
       // Only block for large uncommitted changes

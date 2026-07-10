@@ -255,6 +255,10 @@ class AppServerClient {
     }
   }
 
+  async interruptTurn(threadId, turnId) {
+    return await this.request("turn/interrupt", { threadId, turnId }, INIT_TIMEOUT_MS);
+  }
+
   /**
    * Start a turn with configurable timeout, cancel signal, and delta callback.
    *
@@ -276,10 +280,15 @@ class AppServerClient {
       let agentText = "";
       let resolved = false;
       let turnId = null;
+      let interruptSent = false;
+      let interruptReason = null;
+      let interruptError = null;
+      let interruptGraceTimer = null;
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (cancelChecker) clearInterval(cancelChecker);
+        if (interruptGraceTimer) clearTimeout(interruptGraceTimer);
         // Clear pending request timers to prevent event loop hang.
         // The turn/start request may never get a JSON-RPC response (only
         // notifications), leaving its timeout timer alive indefinitely.
@@ -293,7 +302,7 @@ class AppServerClient {
         if (resolved) return;
         resolved = true;
         cleanup();
-        resolveP(result);
+        resolveP({ ...result, turnId, reconnectCount: 0, interruptError });
       };
 
       const fail = (err) => {
@@ -303,21 +312,34 @@ class AppServerClient {
         rejectP(err);
       };
 
+      const requestInterrupt = async (reason) => {
+        if (resolved || interruptSent) return;
+        if (!turnId) {
+          fail(new CodexError(5, `Turn ${reason} before a turn id was received`));
+          return;
+        }
+        interruptSent = true;
+        interruptReason = reason;
+        try {
+          await this.interruptTurn(threadId, turnId);
+        } catch (error) {
+          interruptError = extractAppServerErrorMessage(error);
+        }
+        if (resolved) return;
+        interruptGraceTimer = setTimeout(() => {
+          finish({ text: agentText, status: interruptReason, interruptError });
+        }, 5000);
+      };
+
       // Hard timeout (safety net)
       const hardTimer = timeoutMs > 0
-        ? setTimeout(() => {
-            if (agentText.length > 0) {
-              finish({ text: agentText, status: "timeout_partial" });
-            } else {
-              fail(new CodexError(5, `Turn timed out after ${timeoutMs}ms with no response`));
-            }
-          }, timeoutMs)
+        ? setTimeout(() => { void requestInterrupt("timeout_partial"); }, timeoutMs)
         : null;
 
       // Cancel signal polling
       const cancelChecker = setInterval(() => {
         if (cancelSignal()) {
-          finish({ text: agentText, status: "cancelled" });
+          void requestInterrupt("cancelled");
         }
       }, CANCEL_CHECK_MS);
 
@@ -333,7 +355,7 @@ class AppServerClient {
         const turn = params?.turn;
         if (params?.threadId !== threadId || !turnId || turn?.id !== turnId) return;
         if (turn?.status === "completed") {
-          finish({ text: agentText, status: "completed" });
+          finish({ text: agentText, status: interruptReason || "completed", interruptError });
         } else if (turn?.status === "failed") {
           const error = turn?.error || params?.error;
           const errMsg = extractAppServerErrorMessage(error || params?.error || "Turn failed");
@@ -345,7 +367,11 @@ class AppServerClient {
             fail(new CodexError(6, `Turn failed: ${errMsg}`));
           }
         } else {
-          finish({ text: agentText, status: turn?.status || "unknown" });
+          finish({
+            text: agentText,
+            status: interruptReason || (turn?.status === "interrupted" ? "cancelled" : turn?.status || "unknown"),
+            interruptError,
+          });
         }
       });
 
@@ -576,6 +602,10 @@ class BrokerClient {
     }
   }
 
+  async interruptTurn(threadId, turnId) {
+    return await this.request("turn/interrupt", { threadId, turnId }, INIT_TIMEOUT_MS);
+  }
+
   async startTurn(threadId, inputText, opts = {}) {
     const timeoutMs = opts.timeout ?? DEFAULT_HARD_TIMEOUT_MS;
     const onDelta = opts.onDelta || (() => {});
@@ -590,11 +620,16 @@ class BrokerClient {
       let turnId = null;
       let reconnectCount = 0;
       let reconnecting = false;
+      let interruptSent = false;
+      let interruptReason = null;
+      let interruptError = null;
+      let interruptGraceTimer = null;
       const reconnectDelays = [250, 1000, 2000];
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (cancelChecker) clearInterval(cancelChecker);
+        if (interruptGraceTimer) clearTimeout(interruptGraceTimer);
         removeDisconnectHandler();
         for (const [, pending] of this.pendingRequests) {
           pending.resolve(null);
@@ -652,19 +687,32 @@ class BrokerClient {
       };
       const removeDisconnectHandler = this.onDisconnect(handleDisconnect);
 
+      const requestInterrupt = async (reason) => {
+        if (resolved || interruptSent) return;
+        if (!turnId) {
+          fail(new CodexError(5, `Turn ${reason} before a turn id was received`));
+          return;
+        }
+        interruptSent = true;
+        interruptReason = reason;
+        try {
+          await this.interruptTurn(threadId, turnId);
+        } catch (error) {
+          interruptError = extractAppServerErrorMessage(error);
+        }
+        if (resolved) return;
+        interruptGraceTimer = setTimeout(() => {
+          finish({ text: agentText, status: interruptReason, interruptError });
+        }, 5000);
+      };
+
       const hardTimer = timeoutMs > 0
-        ? setTimeout(() => {
-            if (agentText.length > 0) {
-              finish({ text: agentText, status: "timeout_partial" });
-            } else {
-              fail(new CodexError(5, `Turn timed out after ${timeoutMs}ms with no response`));
-            }
-          }, timeoutMs)
+        ? setTimeout(() => { void requestInterrupt("timeout_partial"); }, timeoutMs)
         : null;
 
       const cancelChecker = setInterval(() => {
         if (cancelSignal()) {
-          finish({ text: agentText, status: "cancelled" });
+          void requestInterrupt("cancelled");
         }
       }, CANCEL_CHECK_MS);
 
@@ -678,7 +726,7 @@ class BrokerClient {
         const turn = params?.turn;
         if (params?.threadId !== threadId || !turnId || turn?.id !== turnId) return;
         if (turn?.status === "completed") {
-          finish({ text: agentText, status: "completed" });
+          finish({ text: agentText, status: interruptReason || "completed", interruptError });
         } else if (turn?.status === "failed") {
           const error = turn?.error || params?.error;
           const errMsg = extractAppServerErrorMessage(error || params?.error || "Turn failed");
@@ -688,7 +736,11 @@ class BrokerClient {
             fail(new CodexError(6, `Turn failed: ${errMsg}`));
           }
         } else {
-          finish({ text: agentText, status: turn?.status || "unknown" });
+          finish({
+            text: agentText,
+            status: interruptReason || (turn?.status === "interrupted" ? "cancelled" : turn?.status || "unknown"),
+            interruptError,
+          });
         }
       });
 
@@ -849,6 +901,7 @@ const fp = {
   progress: (dir, sid) => resolve(dir, `${sid}_progress.json`),
   pid:      (dir, sid) => resolve(dir, `${sid}_pid`),
   log:      (dir, sid) => resolve(dir, `${sid}_worker.log`),
+  cancel:   (dir, sid) => resolve(dir, `${sid}_cancel`),
 };
 
 function readJson(path) {
@@ -1157,7 +1210,7 @@ async function workerMain(parsed) {
           charsReceived = chars;
           progress("reconnecting", { threadId, turnId: activeTurnId, reconnectCount });
         },
-        cancelSignal: () => cancelled,
+        cancelSignal: () => cancelled || existsSync(fp.cancel(reviewDir, sessionId)),
       });
     } catch (err) {
       throw enrichUnsupportedModelError(err, effectiveModel, availableModels);
@@ -1217,6 +1270,7 @@ async function workerMain(parsed) {
   } finally {
     client.close();
     removeFile(fp.pid(reviewDir, sessionId));
+    removeFile(fp.cancel(reviewDir, sessionId));
   }
 }
 
@@ -1245,6 +1299,7 @@ function spawnWorker(parsed) {
   const nonce = randomBytes(8).toString("hex");
 
   // Initialize progress
+  removeFile(fp.cancel(reviewDir, sessionId));
   saveProgress(reviewDir, sessionId, {
     status: "queued",
     startedAt: new Date().toISOString(),
@@ -1437,13 +1492,11 @@ async function cmdCancel(parsed) {
     return;
   }
 
-  // Send SIGTERM for graceful shutdown
-  try {
-    process.kill(pid, "SIGTERM");
-    log(`SIGTERM sent to worker (PID: ${pid})`);
-  } catch (err) {
-    log(`Failed to signal worker: ${err.message}`);
-  }
+  // Use a file signal so Windows workers can interrupt the upstream turn
+  // before process termination. SIGTERM does not reliably run Node handlers
+  // on Windows.
+  writeFileSync(fp.cancel(reviewDir, sessionId), new Date().toISOString(), "utf8");
+  log(`Cancellation requested for worker (PID: ${pid})`);
 
   // Wait for graceful exit (up to 5s)
   for (let i = 0; i < 25; i++) {
@@ -1462,6 +1515,7 @@ async function cmdCancel(parsed) {
 
   // Clean up PID file
   removeFile(fp.pid(reviewDir, sessionId));
+  removeFile(fp.cancel(reviewDir, sessionId));
 
   // Update progress if still marked as running
   const progress = loadProgress(reviewDir, sessionId);
@@ -1498,6 +1552,7 @@ async function cmdClose(parsed) {
   removeFile(fp.progress(reviewDir, sessionId));
   removeFile(fp.pid(reviewDir, sessionId));
   removeFile(fp.log(reviewDir, sessionId));
+  removeFile(fp.cancel(reviewDir, sessionId));
 
   log(`Session ${sessionId} closed.`);
 }
@@ -1540,15 +1595,15 @@ function cmdScope(parsed) {
       try {
         defaultBranch = execSync(
           "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
-          { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+          { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
         ).trim();
       } catch {
         defaultBranch = "main";
       }
 
       // Check for uncommitted changes first
-      const uncommitted = execSync("git diff --shortstat", { encoding: "utf8" }).trim();
-      const staged = execSync("git diff --cached --shortstat", { encoding: "utf8" }).trim();
+      const uncommitted = execSync("git diff --shortstat", { encoding: "utf8", windowsHide: true }).trim();
+      const staged = execSync("git diff --cached --shortstat", { encoding: "utf8", windowsHide: true }).trim();
 
       if (uncommitted || staged) {
         // Working tree mode: uncommitted + staged changes
@@ -1559,7 +1614,7 @@ function cmdScope(parsed) {
       }
     }
 
-    shortstat = execSync(diffCmd, { encoding: "utf8" }).trim();
+    shortstat = execSync(diffCmd, { encoding: "utf8", windowsHide: true }).trim();
 
     // Parse shortstat: "N files changed, N insertions(+), N deletions(-)"
     const filesMatch = shortstat.match(/(\d+) files? changed/);
@@ -1573,7 +1628,7 @@ function cmdScope(parsed) {
 
     // Count untracked files
     try {
-      const untracked = execSync("git ls-files --others --exclude-standard", { encoding: "utf8" }).trim();
+      const untracked = execSync("git ls-files --others --exclude-standard", { encoding: "utf8", windowsHide: true }).trim();
       untrackedCount = untracked ? untracked.split("\n").length : 0;
     } catch { /* ignore */ }
 
