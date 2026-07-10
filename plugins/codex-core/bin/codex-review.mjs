@@ -332,7 +332,7 @@ class AppServerClient {
           finish({ text: agentText, status: "completed" });
         } else if (turn?.status === "failed") {
           const error = turn?.error || params?.error;
-          const errMsg = error?.message || "Turn failed";
+          const errMsg = extractAppServerErrorMessage(error || params?.error || "Turn failed");
           const errCode = error?.codexErrorInfo;
 
           if (errCode === "usageLimitExceeded" || errMsg.includes("usage limit")) {
@@ -364,7 +364,7 @@ class AppServerClient {
         },
         timeoutMs || DEFAULT_HARD_TIMEOUT_MS
       ).catch((err) => {
-        fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${err.message || JSON.stringify(err)}`));
+        fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
     });
   }
@@ -566,7 +566,7 @@ class BrokerClient {
           finish({ text: agentText, status: "completed" });
         } else if (turn?.status === "failed") {
           const error = turn?.error || params?.error;
-          const errMsg = error?.message || "Turn failed";
+          const errMsg = extractAppServerErrorMessage(error || params?.error || "Turn failed");
           if (error?.codexErrorInfo === "usageLimitExceeded" || errMsg.includes("usage limit")) {
             fail(new CodexError(3, `Rate limit exceeded: ${errMsg}`));
           } else {
@@ -594,7 +594,7 @@ class BrokerClient {
         },
         timeoutMs || DEFAULT_HARD_TIMEOUT_MS
       ).catch((err) => {
-        fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${err.message || JSON.stringify(err)}`));
+        fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
     });
   }
@@ -778,6 +778,38 @@ function log(msg) {
   process.stderr.write(`[codex-review] ${msg}\n`);
 }
 
+function extractAppServerErrorMessage(value) {
+  if (typeof value === "string") {
+    try {
+      return extractAppServerErrorMessage(JSON.parse(value));
+    } catch {
+      return value;
+    }
+  }
+
+  if (!value || typeof value !== "object") {
+    return String(value || "Unknown App Server error");
+  }
+
+  return extractAppServerErrorMessage(
+    value.error || value.message || value.detail || JSON.stringify(value)
+  );
+}
+
+function enrichUnsupportedModelError(error, model, availableModels) {
+  const message = extractAppServerErrorMessage(error?.message || error);
+  if (!/not supported|unsupported model|model.+not available/i.test(message)) {
+    return error;
+  }
+
+  const alternatives = availableModels.filter(name => name !== model);
+  return new CodexError(error?.exitCode || 6, [
+    `Model "${model}" was rejected by the authenticated Codex account: ${message}`,
+    `Available models: ${alternatives.join(", ") || "query model/list for this account"}`,
+    "No fallback was performed. Choose a supported model with --model or CODEX_REVIEW_MODEL.",
+  ].join("\n"));
+}
+
 function normalizeModelCatalog(result) {
   const entries = Array.isArray(result?.data) ? result.data : [];
   const accepted = new Set();
@@ -880,7 +912,7 @@ async function workerMain(parsed) {
       effectiveModel = modelExplicit ? model : (state.model || model || DEFAULT_MODEL);
     }
 
-    await validateModelAvailability(client, effectiveModel);
+    const availableModels = await validateModelAvailability(client, effectiveModel);
 
     if (command === "start") {
       const threadResult = await client.startThread({ model: effectiveModel });
@@ -905,12 +937,17 @@ async function workerMain(parsed) {
 
     // Execute turn
     log(`Starting turn (model: ${effectiveModel})`);
-    const turnResult = await client.startTurn(threadId, promptText, {
-      model: effectiveModel,
-      timeout: hardTimeout,
-      onDelta: (chars) => { charsReceived = chars; },
-      cancelSignal: () => cancelled,
-    });
+    let turnResult;
+    try {
+      turnResult = await client.startTurn(threadId, promptText, {
+        model: effectiveModel,
+        timeout: hardTimeout,
+        onDelta: (chars) => { charsReceived = chars; },
+        cancelSignal: () => cancelled,
+      });
+    } catch (err) {
+      throw enrichUnsupportedModelError(err, effectiveModel, availableModels);
+    }
 
     clearInterval(progressTimer);
 

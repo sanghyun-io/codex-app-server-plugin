@@ -197,6 +197,38 @@ describe("error handling", () => {
     const r = cli(["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR, "--foreground"], { authFail: true });
     assert.equal(r.exit, 2);
   });
+
+  it("explains an unsupported ChatGPT model and lists alternatives", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    writeFileSync(prompt, "test unsupported account routing", "utf8");
+    const upstreamError = JSON.stringify({
+      type: "error",
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        message: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+      },
+    });
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-sol",
+    ], {
+      turnFail: upstreamError,
+      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    });
+
+    assert.equal(result.exit, 6);
+    assert.match(result.stderr, /gpt-5\.6-sol/);
+    assert.match(result.stderr, /not supported/i);
+    assert.match(result.stderr, /No fallback was performed/);
+    assert.match(result.stderr, /gpt-5\.6-terra/);
+  });
 });
 
 describe("broker turn serialization", () => {
