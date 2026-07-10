@@ -275,6 +275,7 @@ class AppServerClient {
     return new Promise((resolveP, rejectP) => {
       let agentText = "";
       let resolved = false;
+      let turnId = null;
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
@@ -322,6 +323,7 @@ class AppServerClient {
 
       // Collect agent message deltas
       this.onNotification("item/agentMessage/delta", (params) => {
+        if (params?.threadId !== threadId || !turnId || params?.turnId !== turnId) return;
         agentText += params?.delta || "";
         onDelta(agentText.length);
       });
@@ -329,6 +331,7 @@ class AppServerClient {
       // Handle turn completion
       this.onNotification("turn/completed", (params) => {
         const turn = params?.turn;
+        if (params?.threadId !== threadId || !turnId || turn?.id !== turnId) return;
         if (turn?.status === "completed") {
           finish({ text: agentText, status: "completed" });
         } else if (turn?.status === "failed") {
@@ -365,7 +368,10 @@ class AppServerClient {
           effort: opts.effort || "high",
         },
         timeoutMs || DEFAULT_HARD_TIMEOUT_MS
-      ).catch((err) => {
+      ).then((result) => {
+        turnId = result?.turn?.id || null;
+        if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
+      }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
     });
@@ -517,6 +523,7 @@ class BrokerClient {
     return new Promise((resolveP, rejectP) => {
       let agentText = "";
       let resolved = false;
+      let turnId = null;
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
@@ -558,12 +565,14 @@ class BrokerClient {
       }, CANCEL_CHECK_MS);
 
       this.onNotification("item/agentMessage/delta", (params) => {
+        if (params?.threadId !== threadId || !turnId || params?.turnId !== turnId) return;
         agentText += params?.delta || "";
         onDelta(agentText.length);
       });
 
       this.onNotification("turn/completed", (params) => {
         const turn = params?.turn;
+        if (params?.threadId !== threadId || !turnId || turn?.id !== turnId) return;
         if (turn?.status === "completed") {
           finish({ text: agentText, status: "completed" });
         } else if (turn?.status === "failed") {
@@ -596,7 +605,10 @@ class BrokerClient {
           effort: opts.effort || "high",
         },
         timeoutMs || DEFAULT_HARD_TIMEOUT_MS
-      ).catch((err) => {
+      ).then((result) => {
+        turnId = result?.turn?.id || null;
+        if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
+      }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
     });

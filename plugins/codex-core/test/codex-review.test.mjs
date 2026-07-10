@@ -41,6 +41,7 @@ function cli(args, opts = {}) {
     FAKE_MODEL_LIST_UNSUPPORTED: opts.modelListUnsupported ? "1" : "",
     FAKE_TURN_START_REJECT: opts.turnStartReject ?? "",
     FAKE_INTERRUPT_LOG: opts.interruptLog ?? "",
+    FAKE_FOREIGN_DELTA: opts.foreignDelta ? "1" : "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -401,7 +402,7 @@ describe("broker model error handling", () => {
   });
 });
 
-describe("broker turn serialization", () => {
+describe("broker turn multiplexing", () => {
   const BROKER_HOME = resolve(TEST_DIR, "broker_home");
   const BROKER_TMP = resolve(BROKER_HOME, ".claude", "tmp");
   const BROKER_PORT_FILE = resolve(BROKER_TMP, "broker.port");
@@ -482,10 +483,7 @@ describe("broker turn serialization", () => {
     assert.notEqual(tag1[0], tag2[0], "concurrent sessions leaked into each other");
   });
 
-  it("serializes three concurrent turn-starts in FIFO order", async () => {
-    // Three simultaneous starts must each end up with exactly one unique
-    // threadId tag, proving the broker isolated each turn's notification
-    // stream from the others.
+  it("runs three isolated turn-starts in parallel", async () => {
     const sessions = Array.from({ length: 3 }, (_, i) => {
       const sid = newSid();
       const promptPath = resolve(TEST_DIR, `${sid}_p.txt`);
@@ -494,6 +492,7 @@ describe("broker turn serialization", () => {
       return { sid, promptPath, outputPath, idx: i };
     });
 
+    const startedAt = Date.now();
     for (const s of sessions) {
       const r = cli(
         ["start", s.promptPath, s.outputPath, "--session", s.sid, "--review-dir", TEST_DIR],
@@ -501,7 +500,7 @@ describe("broker turn serialization", () => {
           broker: true,
           home: BROKER_HOME,
           tagThread: true,
-          turnDelay: 400,
+          turnDelay: 900,
           turnText: `Content ${s.idx}.\n\n[VERDICT] - APPROVE`,
         }
       );
@@ -523,6 +522,28 @@ describe("broker turn serialization", () => {
     // All three tags must be distinct — no session received another's deltas.
     const unique = new Set(tags);
     assert.equal(unique.size, tags.length, `concurrent sessions leaked: ${tags}`);
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(elapsedMs < 2300, `turns were serialized: ${elapsedMs}ms`);
+  });
+
+  it("direct mode ignores notifications for a foreign thread and turn", () => {
+    const sid = newSid();
+    const promptPath = resolve(TEST_DIR, `${sid}_foreign_p.txt`);
+    const outputPath = resolve(TEST_DIR, `${sid}_foreign_o.txt`);
+    writeFileSync(promptPath, "Ignore foreign notifications.", "utf8");
+
+    const result = cli([
+      "start", promptPath, outputPath,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+    ], {
+      foreignDelta: true,
+      turnText: "Expected output.\n\n[VERDICT] - APPROVE",
+    });
+
+    assert.equal(result.exit, 0, result.stderr);
+    assert.doesNotMatch(readFileSync(outputPath, "utf8"), /FOREIGN_NOTIFICATION/);
   });
 });
 

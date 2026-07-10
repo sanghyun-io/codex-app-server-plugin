@@ -29,6 +29,7 @@ const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
 const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
 const REQUEST_LOG = process.env.FAKE_REQUEST_LOG || "";
 const INTERRUPT_LOG = process.env.FAKE_INTERRUPT_LOG || "";
+const FOREIGN_DELTA = !!process.env.FAKE_FOREIGN_DELTA;
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -156,6 +157,18 @@ function handleRequest(msg) {
         // tests can detect if deltas from one thread leak into another.
         const tagged = TAG_THREAD ? `[${threadId}] ${TURN_TEXT}` : TURN_TEXT;
         const chunks = tagged.match(/.{1,50}/g) || [tagged];
+
+        if (FOREIGN_DELTA) {
+          send({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "foreign-thread",
+              turnId: "foreign-turn",
+              itemId: "foreign-item",
+              delta: "FOREIGN_NOTIFICATION",
+            },
+          });
+        }
 
         let delay = 0;
         for (const chunk of chunks) {

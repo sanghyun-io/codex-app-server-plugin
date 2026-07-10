@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Codex App Server Broker — Persistent IPC serializer
+ * Codex App Server Broker — Persistent IPC multiplexer
  *
- * Holds a single codex app-server subprocess and serializes concurrent
- * access from multiple workers via a TCP server on localhost.
+ * Holds a single codex app-server subprocess and multiplexes concurrent
+ * workers via a TCP server on localhost.
  *
  * Benefits:
  *   - Eliminates per-turn app-server spawn overhead (~2-3s saved per call)
@@ -26,17 +26,10 @@
  *     { "type": "pong" }
  *     { "type": "error", "message": "..." }
  *
- * Turn serialization:
- *   The upstream codex app-server streams agent deltas and turn events on a
- *   single stdin/stdout pipe without a threadId tag, so two concurrent
- *   `turn/start` requests would produce interleaved notifications that the
- *   broker cannot disambiguate. To prevent cross-turn contamination, the
- *   broker serializes `turn/start`: one turn owns the notification stream at
- *   a time, later requests queue until the previous turn emits a terminal
- *   event (`turn/completed` / `turn/failed` / `turn/cancelled`) or the
- *   client disconnects. Notifications whose method matches `item/*`,
- *   `turn/*`, or `error` are routed only to the active turn's socket;
- *   everything else goes through the normal subscribe fan-out.
+ * Turn routing:
+ *   Current App Server turn and item notifications carry threadId/turnId.
+ *   The broker forwards subscribed notifications and each worker accepts
+ *   only events matching its active protocol identity.
  *
  * Lifecycle:
  *   - Starts on first worker connection (via ensureBroker() in codex-review.mjs)
@@ -64,22 +57,6 @@ const TMP_DIR = resolve(HOME, ".claude", "tmp");
 const PORT_FILE = resolve(TMP_DIR, "broker.port");
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;      // 10 minutes
 const INIT_TIMEOUT_MS = 30_000;              // 30s for codex init
-const DEFAULT_TURN_TIMEOUT_MS = 1_800_000;   // 30 min (matches codex-review default)
-const TURN_SAFETY_BUFFER_MS = 15_000;        // grace window beyond client timeout
-
-const TURN_SCOPED_PREFIXES = ["item/", "turn/"];
-const TURN_SCOPED_METHODS = new Set(["error"]);
-const TURN_TERMINAL_METHODS = new Set([
-  "turn/completed",
-  "turn/failed",
-  "turn/cancelled",
-]);
-
-function isTurnScopedMethod(method) {
-  if (!method) return false;
-  if (TURN_SCOPED_METHODS.has(method)) return true;
-  return TURN_SCOPED_PREFIXES.some((p) => method.startsWith(p));
-}
 
 // ---------------------------------------------------------------------------
 // Codex binary resolution (mirrors codex-review.mjs resolveCodexLauncher)
@@ -143,9 +120,6 @@ class AppServerConnection {
     this.serverInfo = null;
     this.account = null;
 
-    // Turn serialization state
-    this.activeTurn = null;               // { socket, startedAt, safetyTimer }
-    this.turnWaiters = [];                // FIFO queue of { socket, timeoutMs, resolve }
   }
 
   nextId() { return ++this.msgId; }
@@ -194,27 +168,7 @@ class AppServerConnection {
 
     if (!msg.method) return;
 
-    // Turn-scoped notifications must never leak between concurrent turns.
-    // Route them only to the socket that currently owns the turn; if no turn
-    // is active (e.g. trailing notifications arriving after a cancel), drop.
-    if (isTurnScopedMethod(msg.method)) {
-      const sock = this.activeTurn?.socket;
-      if (sock) {
-        try {
-          sock.write(JSON.stringify({
-            type: "notification",
-            method: msg.method,
-            params: msg.params,
-          }) + "\n");
-        } catch { /* client disconnected */ }
-      }
-      if (TURN_TERMINAL_METHODS.has(msg.method)) {
-        this._releaseTurn(`terminal:${msg.method}`);
-      }
-      return;
-    }
-
-    // Non-turn notification → forward via subscribe fan-out
+    // Forward via subscribe fan-out. Workers scope turn events by protocol id.
     for (const sub of this.subscribers) {
       if (sub.methods.includes("*") || sub.methods.includes(msg.method)) {
         try {
@@ -286,80 +240,7 @@ class AppServerConnection {
     this.subscribers.delete(sub);
   }
 
-  // -- Turn serialization --
-
-  /**
-   * Acquire exclusive ownership of the upstream notification stream for a
-   * `turn/start` request. Resolves immediately if no turn is active,
-   * otherwise queues FIFO until the previous turn releases.
-   */
-  acquireTurn(socket, timeoutMs) {
-    return new Promise((resolve) => {
-      const task = { socket, timeoutMs: timeoutMs || DEFAULT_TURN_TIMEOUT_MS, resolve };
-      if (!this.activeTurn) {
-        this._grantTurn(task);
-      } else {
-        this.turnWaiters.push(task);
-        log(`Turn queued (queue depth: ${this.turnWaiters.length})`);
-      }
-    });
-  }
-
-  _grantTurn(task) {
-    const safetyMs = task.timeoutMs + TURN_SAFETY_BUFFER_MS;
-    const safetyTimer = setTimeout(() => {
-      log(`Turn safety timeout (${safetyMs}ms) — force-releasing`);
-      this._releaseTurn("safety-timeout");
-    }, safetyMs);
-    this.activeTurn = {
-      socket: task.socket,
-      startedAt: Date.now(),
-      safetyTimer,
-    };
-    task.resolve();
-  }
-
-  /**
-   * Release the active-turn mutex. Grants the next waiter if any. Safe to
-   * call multiple times or when no turn is active.
-   */
-  _releaseTurn(reason) {
-    if (!this.activeTurn) return;
-    if (this.activeTurn.safetyTimer) clearTimeout(this.activeTurn.safetyTimer);
-    this.activeTurn = null;
-    if (this.turnWaiters.length > 0) {
-      const next = this.turnWaiters.shift();
-      // Skip waiters whose socket has already disconnected
-      if (next.socket.destroyed) {
-        this._releaseTurn("skip-dead-waiter");
-        return;
-      }
-      log(`Turn released (${reason || "unknown"}), granting queued waiter`);
-      this._grantTurn(next);
-    } else if (reason) {
-      log(`Turn released (${reason})`);
-    }
-  }
-
-  /**
-   * Handle a socket closing: release the turn if this socket owns it, and
-   * drop it from the waiter queue.
-   */
-  onSocketClose(socket) {
-    // Drop from waiter queue
-    if (this.turnWaiters.length > 0) {
-      this.turnWaiters = this.turnWaiters.filter((w) => w.socket !== socket);
-    }
-    // Release if this socket owns the active turn
-    if (this.activeTurn?.socket === socket) {
-      this._releaseTurn("socket-closed");
-    }
-  }
-
   close() {
-    if (this.activeTurn?.safetyTimer) clearTimeout(this.activeTurn.safetyTimer);
-    this.activeTurn = null;
-    this.turnWaiters = [];
     this.pendingRequests.clear();
     this.subscribers.clear();
     if (this.rl) { this.rl.close(); this.rl = null; }
@@ -436,25 +317,8 @@ class BrokerServer {
         switch (msg.action) {
           case "request": {
             const timeoutMs = msg.timeout || INIT_TIMEOUT_MS;
-            const isTurnStart = msg.method === "turn/start";
-            let acquired = false;
-
-            if (isTurnStart) {
-              await this.appServer.acquireTurn(socket, timeoutMs);
-              acquired = true;
-            }
-
-            try {
-              const result = await this.appServer.request(msg.method, msg.params, timeoutMs);
-              socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
-            } catch (err) {
-              if (isTurnStart && acquired && this.appServer.activeTurn?.socket === socket) {
-                // turn/start request failed before upstream streamed terminal event;
-                // release the mutex so other clients aren't blocked.
-                this.appServer._releaseTurn("turn-start-request-error");
-              }
-              throw err;
-            }
+            const result = await this.appServer.request(msg.method, msg.params, timeoutMs);
+            socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
             break;
           }
 
@@ -504,7 +368,6 @@ class BrokerServer {
         this.appServer.removeSubscriber(subscription);
         subscription = null;
       }
-      this.appServer.onSocketClose(socket);
       rl.close();
     };
 
