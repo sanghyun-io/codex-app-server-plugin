@@ -18,14 +18,14 @@ Follow the complete workflow defined in `~/.claude/rules/codex-delegate.md`.
 ## Arguments
 
 - `<task description>` — Free-form task description (e.g., "Fix the null pointer in UserService.login")
-- `--model <name>` — Override Codex model (default: `gpt-5.5`)
-- `--read-only` — Question-answer mode: Codex answers without proposing file changes
+- `--model <name>` — Override Codex model (default: `gpt-5.6-terra`)
+- `--read-only` — Question-answer mode using `gpt-5.6-luna` by default; Codex answers without proposing file changes
 
 ## Examples
 
 ```
 /codex-core:delegate Refactor auth middleware to use JWT instead of session tokens
-/codex-core:delegate Find and fix the race condition in OrderService --model gpt-4o
+/codex-core:delegate Find and fix the race condition in OrderService --model gpt-5.6-sol
 /codex-core:delegate Why does /api/v1/users return 500 when email is null --read-only
 ```
 

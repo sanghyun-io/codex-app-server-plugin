@@ -2,7 +2,7 @@
 
 > 🌐 [한국어](./README.ko.md)
 
-A Claude Code plugin marketplace that integrates the **Codex App Server** with Claude Code. Lets you call Codex (gpt-5.5 by default, configurable) from natural language or slash commands, with stateful threads and cross-turn context reuse.
+A Claude Code plugin marketplace that integrates the **Codex App Server** with Claude Code. New sessions use GPT-5.6 workflow defaults, with stateful threads, model overrides, and cross-turn context reuse.
 
 ## Plugins
 
@@ -22,7 +22,7 @@ Claude Code
   └─ codex-review.mjs              (JSON-RPC wrapper — installed by codex-core)
        └─ broker.mjs (TCP, opt-out) (persistent IPC serializer — auth cached, warm app-server)
             └─ codex app-server      (single subprocess, shared across workers)
-                 └─ gpt-5.5            (stateful thread, model is configurable)
+                 └─ gpt-5.6-*          (stateful thread, model is configurable)
 ```
 
 The wrapper manages thread lifecycle via three commands:
@@ -32,21 +32,21 @@ The wrapper manages thread lifecycle via three commands:
 
 By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s) and reuses a single auth check across all workers. The broker auto-starts on first use, idles out after 10 minutes, and is torn down by the `SessionEnd` hook. Set `CODEX_REVIEW_NO_BROKER=1` to bypass the broker and spawn `codex app-server` directly (used in tests).
 
-The model used for each call is configurable (priority: CLI flag > env var > default `gpt-5.5`):
+The model used for each call is configurable (priority: CLI flag > env var > workflow default > wrapper default `gpt-5.6-terra`):
 
 ```bash
 # CLI flag
-node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-4o
+node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-5.6-sol
 
 # Environment variable
-CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
+CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 ```
 
 ### Environment Variables
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `CODEX_REVIEW_MODEL` | Override default model | `gpt-5.5` |
+| `CODEX_REVIEW_MODEL` | Override workflow/wrapper model | unset (wrapper default: `gpt-5.6-terra`) |
 | `CODEX_REVIEW_NO_BROKER` | Skip broker, spawn `codex app-server` directly (set to `1`) | unset |
 | `CODEX_BINARY` | Path to a custom binary used in place of `codex app-server` (testing hook) | unset |
 
@@ -128,7 +128,7 @@ With `codex-delegation.md` imported (auto-activated on install), Claude routes C
 | "Codex 세션 뭐 돌아가고 있어?" / "What Codex sessions are running" | `sessions` |
 | "Codex 지금 거 중단해" / "Stop the Codex session" | `halt` |
 | "Codex 그 결과 다시 보여줘" / "Show me that Codex output" | `readout` |
-| "Codex에게 **gpt-4o로** 부탁" / "Have Codex **with gpt-4o**" | (any) `--model gpt-4o` |
+| "Codex에게 **gpt-5.6-sol로** 부탁" / "Have Codex **with gpt-5.6-sol**" | (any) `--model gpt-5.6-sol` |
 | "**o1 써서** 검토" / "Ask Codex **using o1**" | (any) `--model o1` |
 
 If the intent is ambiguous, Claude asks with an `AskUserQuestion` prompt instead of guessing.
@@ -141,7 +141,17 @@ Every Codex-backed skill accepts `--model <name>`. Priority:
 
 1. `--model <name>` CLI flag (highest)
 2. `CODEX_REVIEW_MODEL` environment variable
-3. Default (`gpt-5.5`)
+3. Workflow default
+4. Wrapper default (`gpt-5.6-terra`)
+
+| Workflow | Default model |
+|----------|---------------|
+| `red-review` | `gpt-5.6-sol` |
+| `code-review` | `gpt-5.6-terra` |
+| regular `delegate` | `gpt-5.6-terra` |
+| `delegate --read-only` | `gpt-5.6-luna` |
+
+Before creating or resuming a thread, the wrapper checks `model/list` for the authenticated account. If a requested model is unavailable, it exits without fallback and prints the available model names. Existing sessions keep their stored model across follow-up turns.
 
 Recognized prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 
@@ -160,7 +170,7 @@ This keeps file writes under Claude's tool-permission control while letting Code
 
 ```
 /codex-core:delegate Fix the null pointer in UserService.login
-/codex-core:delegate Refactor auth middleware to use JWT --model gpt-4o
+/codex-core:delegate Refactor auth middleware to use JWT --model gpt-5.6-sol
 /codex-core:delegate Why is /api/v1/users returning 500 --read-only
 
 /codex-core:sessions            # List all sessions
@@ -199,7 +209,7 @@ The install hook adds a separate marker block (`<!-- @codex-code-review:begin --
 /codex-code-review:code-review                  # Current branch vs default branch
 /codex-code-review:code-review PR#123           # Review a specific PR
 /codex-code-review:code-review --base main      # Review against a specific base
-/codex-code-review:code-review --model gpt-4o   # Override Codex model
+/codex-code-review:code-review --model gpt-5.6-sol   # Override Codex model
 /codex-code-review:code-review --with-opus      # Add Claude Opus cross-validation
 ```
 

@@ -75,7 +75,8 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 | 상황 | 처리 |
 |------|------|
 | `--model <X>` 명시 | Turn 1 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
-| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.5` 사용) |
+| 미명시 + 일반 위임 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
+| 미명시 + `--read-only` | `--default-model "gpt-5.6-luna"` 추가 (`CODEX_REVIEW_MODEL`이 있으면 환경변수가 우선) |
 
 > **follow-up 자동 처리**: `start`에서 지정한 모델은 `dg_{SID}_state.json`에 저장되어
 > 후속 `follow-up` 호출에서 자동 재사용된다. follow-up에 `--model`을 다시 명시할 필요는 없다.
@@ -96,7 +97,7 @@ PROMPT_EOF
 echo "EXIT_CODE: $?"
 ```
 
-`$ARGUMENTS`에 `--model <X>`가 있으면 위 명령에 `--model "<X>"`를 추가한다 (예: `--review-dir "..." --model "gpt-4o" <<'PROMPT_EOF'`).
+`$ARGUMENTS`에 `--read-only`가 있으면 위 명령에 `--default-model "gpt-5.6-luna"`를 추가한다. `$ARGUMENTS`에 `--model <X>`도 있으면 `--model "<X>"`를 함께 추가하며 사용자 지정 모델이 내부 기본값보다 우선한다 (예: `--review-dir "..." --default-model "gpt-5.6-luna" --model "gpt-5.6-sol" <<'PROMPT_EOF'`).
 
 ### Step 2: 폴링
 

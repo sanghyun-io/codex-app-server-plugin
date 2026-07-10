@@ -150,24 +150,24 @@ Claude: codex-review close로 Thread 종료
 
 | 패턴 | 예시 발화 | 추출 모델 |
 |------|-----------|----------|
-| `{모델}(으)로` | "gpt-4o로 리뷰해줘" | `gpt-4o` |
+| `{모델}(으)로` | "gpt-5.6-sol로 리뷰해줘" | `gpt-5.6-sol` |
 | `{모델} 사용해서` | "o1 사용해서 검토 부탁" | `o1` |
 | `{모델} 써서` | "claude-3.5-sonnet 써서 분석" | `claude-3.5-sonnet` |
-| `{모델} 모델로` | "gpt-5 모델로 위임" | `gpt-5` |
+| `{모델} 모델로` | "gpt-5.6-terra 모델로 위임" | `gpt-5.6-terra` |
 
 #### 영어
 
 | 패턴 | 예시 발화 | 추출 모델 |
 |------|-----------|----------|
-| `with {model}` | "Have Codex review with gpt-4o" | `gpt-4o` |
+| `with {model}` | "Have Codex review with gpt-5.6-sol" | `gpt-5.6-sol` |
 | `using {model}` | "Ask Codex using o1" | `o1` |
-| `{model} model` | "use gpt-5 model" | `gpt-5` |
+| `{model} model` | "use gpt-5.6-terra model" | `gpt-5.6-terra` |
 
 ### 모델명 인식 휴리스틱
 
 다음 prefix 중 하나로 시작하는 토큰을 모델명 후보로 간주한다:
 
-- `gpt-*` (예: `gpt-4o`, `gpt-5.5`, `gpt-5`)
+- `gpt-*` (예: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`)
 - `o1*`, `o3*`, `o4*` (예: `o1`, `o1-mini`, `o3-pro`)
 - `claude-*` (예: `claude-3.5-sonnet`)
 - `gemini-*`
@@ -181,10 +181,10 @@ Claude: codex-review close로 Thread 종료
 
 | 발화 | 라우팅 |
 |------|--------|
-| "Codex에게 gpt-4o로 리뷰 부탁해" | `/code-review --model gpt-4o` |
+| "Codex에게 gpt-5.6-sol로 리뷰 부탁해" | `/code-review --model gpt-5.6-sol` |
 | "Codex로 o1 써서 보안 검토" | `/red-review --model o1` |
-| "Have Codex fix the bug using gpt-5" | `/delegate "fix the bug" --model gpt-5` |
-| "gpt-4o 모델로 이 함수 왜 느린지 물어봐" | `/delegate "이 함수 왜 느린지" --read-only --model gpt-4o` |
+| "Have Codex fix the bug using gpt-5.6-terra" | `/delegate "fix the bug" --model gpt-5.6-terra` |
+| "gpt-5.6-luna 모델로 이 함수 왜 느린지 물어봐" | `/delegate "이 함수 왜 느린지" --read-only --model gpt-5.6-luna` |
 
 ### 모호 / 충돌 처리
 

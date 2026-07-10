@@ -2,7 +2,7 @@
 
 > 🌐 [README.md (ENG)](./README.md)
 
-**Codex App Server**를 Claude Code에 통합하는 Claude Code 플러그인 마켓플레이스. 자연어나 슬래시 명령으로 Codex(기본 gpt-5.5, 변경 가능)를 호출할 수 있고, stateful thread + turn 간 컨텍스트 재사용을 지원합니다.
+**Codex App Server**를 Claude Code에 통합하는 Claude Code 플러그인 마켓플레이스. 새 세션은 GPT-5.6 워크플로 기본값을 사용하며, 모델 오버라이드와 stateful thread + turn 간 컨텍스트 재사용을 지원합니다.
 
 ## 플러그인 구성
 
@@ -22,7 +22,7 @@ Claude Code
   └─ codex-review.mjs              (JSON-RPC wrapper — codex-core가 설치)
        └─ broker.mjs (TCP, opt-out) (영속 IPC 직렬화 — auth 캐시, warm app-server)
             └─ codex app-server      (단일 subprocess, 모든 워커가 공유)
-                 └─ gpt-5.5            (stateful thread, 모델 변경 가능)
+                 └─ gpt-5.6-*          (stateful thread, 모델 변경 가능)
 ```
 
 Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
@@ -32,21 +32,21 @@ Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
 
 기본적으로 워커는 **영속 broker**(`broker.mjs`)를 통해 연결됩니다. broker는 localhost TCP 포트에서 단일 warm `codex app-server` subprocess를 유지해, turn마다 발생하는 spawn 오버헤드(~2–3초)를 제거하고 모든 워커가 단일 auth 체크를 재사용하게 합니다. broker는 첫 사용 시 자동 시작되고, 10분 idle 후 종료되며, `SessionEnd` hook으로도 정리됩니다. `CODEX_REVIEW_NO_BROKER=1`을 설정하면 broker를 거치지 않고 `codex app-server`를 직접 spawn합니다 (테스트 용도).
 
-호출별 모델은 변경 가능합니다 (우선순위: CLI 플래그 > 환경변수 > 기본 `gpt-5.5`):
+호출별 모델은 변경 가능합니다 (우선순위: CLI 플래그 > 환경변수 > 워크플로 기본값 > wrapper 기본값 `gpt-5.6-terra`):
 
 ```bash
 # CLI 플래그
-node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-4o
+node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-5.6-sol
 
 # 환경변수
-CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
+CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 ```
 
 ### 환경변수
 
 | 변수 | 용도 | 기본값 |
 |------|------|--------|
-| `CODEX_REVIEW_MODEL` | 기본 모델 오버라이드 | `gpt-5.5` |
+| `CODEX_REVIEW_MODEL` | 워크플로/wrapper 모델 오버라이드 | unset (wrapper 기본값: `gpt-5.6-terra`) |
 | `CODEX_REVIEW_NO_BROKER` | broker 생략, `codex app-server` 직접 spawn (`1`로 설정) | unset |
 | `CODEX_BINARY` | `codex app-server` 대신 사용할 커스텀 바이너리 경로 (테스트용) | unset |
 
@@ -128,7 +128,7 @@ CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
 | "Codex 세션 뭐 돌아가고 있어?" / "What Codex sessions are running" | `sessions` |
 | "Codex 지금 거 중단해" / "Stop the Codex session" | `halt` |
 | "Codex 그 결과 다시 보여줘" / "Show me that Codex output" | `readout` |
-| "Codex에게 **gpt-4o로** 부탁" / "Have Codex **with gpt-4o**" | (모든 의도) `--model gpt-4o` |
+| "Codex에게 **gpt-5.6-sol로** 부탁" / "Have Codex **with gpt-5.6-sol**" | (모든 의도) `--model gpt-5.6-sol` |
 | "**o1 써서** 검토" / "Ask Codex **using o1**" | (모든 의도) `--model o1` |
 
 의도가 모호하면 Claude는 추측 대신 `AskUserQuestion`으로 확인을 받습니다.
@@ -141,7 +141,17 @@ CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
 
 1. `--model <name>` CLI 플래그 (최우선)
 2. `CODEX_REVIEW_MODEL` 환경변수
-3. 기본값 (`gpt-5.5`)
+3. 워크플로 기본값
+4. wrapper 기본값 (`gpt-5.6-terra`)
+
+| 워크플로 | 기본 모델 |
+|----------|-----------|
+| `red-review` | `gpt-5.6-sol` |
+| `code-review` | `gpt-5.6-terra` |
+| 일반 `delegate` | `gpt-5.6-terra` |
+| `delegate --read-only` | `gpt-5.6-luna` |
+
+Wrapper는 thread를 생성하거나 resume하기 전에 인증 계정의 `model/list`를 확인합니다. 요청 모델을 사용할 수 없으면 fallback하지 않고 종료하며 사용 가능한 모델명을 출력합니다. 기존 세션은 follow-up에서도 저장된 모델을 유지합니다.
 
 자연어 추출 시 인식되는 prefix: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. 선택된 모델은 thread의 `state.json`에 저장되어 follow-up turn에서 자동 재사용됩니다.
 
@@ -160,7 +170,7 @@ CODEX_REVIEW_MODEL=gpt-4o node codex-review.mjs start ...
 
 ```
 /codex-core:delegate Fix the null pointer in UserService.login
-/codex-core:delegate Refactor auth middleware to use JWT --model gpt-4o
+/codex-core:delegate Refactor auth middleware to use JWT --model gpt-5.6-sol
 /codex-core:delegate Why is /api/v1/users returning 500 --read-only
 
 /codex-core:sessions            # 모든 세션 목록
@@ -199,7 +209,7 @@ Install hook이 `~/.claude/CLAUDE.md`에 별도 마커 블록(`<!-- @codex-code-
 /codex-code-review:code-review                  # 현재 브랜치 vs default 브랜치
 /codex-code-review:code-review PR#123           # 특정 PR 리뷰
 /codex-code-review:code-review --base main      # 특정 base 기준 리뷰
-/codex-code-review:code-review --model gpt-4o   # Codex 모델 오버라이드
+/codex-code-review:code-review --model gpt-5.6-sol   # Codex 모델 오버라이드
 /codex-code-review:code-review --with-opus      # Claude Opus 교차검증 추가
 ```
 

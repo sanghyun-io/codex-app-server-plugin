@@ -11,7 +11,7 @@
  *   close      --session <SID> --review-dir <DIR>                     Clean up all session files
  *
  * Options:
- *   --model <MODEL>       Model override (default: gpt-5.5, env: CODEX_REVIEW_MODEL)
+ *   --model <MODEL>       Model override (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
  *   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
  *   --foreground          Run synchronously (v1 compat, no background worker)
  *   --stdin               Read prompt from stdin and write to <prompt-file> (avoids Write tool permission)
@@ -216,7 +216,7 @@ class AppServerClient {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.0.0" },
+      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.4.0" },
     });
     this.notify("initialized");
     return result;
@@ -1410,7 +1410,7 @@ Usage:
   codex-review scope      [<base-ref>]
 
 Options:
-  --model <MODEL>       Model to use (default: gpt-5.5, env: CODEX_REVIEW_MODEL)
+  --model <MODEL>       Model to use (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
   --foreground          Run synchronously (v1 compat)
   --stdin               Read prompt from stdin, write to <prompt-file>

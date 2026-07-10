@@ -443,10 +443,10 @@ Show the final summary:
   • 공격자 리뷰:    /codex-code-review:red-review
 
 자연어 트리거:
-  "Codex에게 이 버그 고쳐달라고 해" / "Codex로 gpt-4o 써서 검토 부탁"
+  "Codex에게 이 버그 고쳐달라고 해" / "Codex로 gpt-5.6-sol 써서 검토 부탁"
   같은 자연어도 codex-delegation 라우터가 감지해서 적절한 스킬로 연결됩니다.
 
-모델: gpt-5.5 (Stateful Thread, --model 플래그 / CODEX_REVIEW_MODEL 환경변수로 오버라이드)
+모델: 일반 gpt-5.6-terra / red-review gpt-5.6-sol / read-only delegate gpt-5.6-luna (Stateful Thread, --model 플래그 / CODEX_REVIEW_MODEL 환경변수로 오버라이드)
 브로커: 기본 활성화 (CODEX_REVIEW_NO_BROKER=1 로 비활성화 가능)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```

@@ -360,9 +360,11 @@ describe("model payload consistency", () => {
   const MODEL_BROKER_HOME = resolve(TEST_DIR, "model_broker_home");
   const MODEL_BROKER_TMP = resolve(MODEL_BROKER_HOME, ".claude", "tmp");
   const MODEL_BROKER_PORT_FILE = resolve(MODEL_BROKER_TMP, "broker.port");
+  const MODEL_BROKER_REQUEST_LOG = resolve(TEST_DIR, "model_broker_requests.jsonl");
 
   before(() => {
     mkdirSync(MODEL_BROKER_TMP, { recursive: true });
+    rmSync(MODEL_BROKER_REQUEST_LOG, { force: true });
   });
 
   after(() => {
@@ -430,7 +432,6 @@ describe("model payload consistency", () => {
     const sid = newSid();
     const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
     const output = resolve(TEST_DIR, `${sid}_o.txt`);
-    const requestLog = resolve(TEST_DIR, `${sid}_broker_requests.jsonl`);
     writeFileSync(prompt, "Review this code through the broker.", "utf8");
 
     const result = cli([
@@ -442,11 +443,11 @@ describe("model payload consistency", () => {
     ], {
       broker: true,
       home: MODEL_BROKER_HOME,
-      requestLog,
+      requestLog: MODEL_BROKER_REQUEST_LOG,
     });
 
     assert.equal(result.exit, 0, result.stderr);
-    const requests = readRequests(requestLog);
+    const requests = readRequests(MODEL_BROKER_REQUEST_LOG);
     assert.equal(
       requests.find(request => request.method === "thread/start")?.params?.model,
       "gpt-5.6-sol"
@@ -455,6 +456,46 @@ describe("model payload consistency", () => {
       requests.find(request => request.method === "turn/start")?.params?.model,
       "gpt-5.6-sol"
     );
+  });
+
+  it("preserves a workflow default through a background worker and broker", async () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    writeFileSync(prompt, "Review this code in a background worker.", "utf8");
+
+    const startResult = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--default-model", "gpt-5.6-luna",
+    ], {
+      broker: true,
+      home: MODEL_BROKER_HOME,
+      requestLog: MODEL_BROKER_REQUEST_LOG,
+    });
+    assert.equal(startResult.exit, 0, startResult.stderr);
+
+    let completed = false;
+    for (let i = 0; i < 30; i++) {
+      await sleep(300);
+      const statusResult = cli(
+        ["status", "--session", sid, "--review-dir", TEST_DIR],
+        { broker: true, home: MODEL_BROKER_HOME }
+      );
+      if (statusResult.exit === 0) {
+        completed = true;
+        break;
+      }
+      assert.equal(statusResult.exit, 7, statusResult.stderr);
+    }
+    assert.equal(completed, true, "background broker session should complete");
+
+    const requests = readRequests(MODEL_BROKER_REQUEST_LOG);
+    const threadStarts = requests.filter(request => request.method === "thread/start");
+    const turnStarts = requests.filter(request => request.method === "turn/start");
+    assert.equal(threadStarts.at(-1)?.params?.model, "gpt-5.6-luna");
+    assert.equal(turnStarts.at(-1)?.params?.model, "gpt-5.6-luna");
   });
 });
 

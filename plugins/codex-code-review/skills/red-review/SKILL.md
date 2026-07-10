@@ -18,7 +18,7 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 - `(no args)` — Review current branch vs default branch
 - `PR#N` — Review PR number N via `gh pr diff N`
 - `--base <ref>` — Review against a specific base ref
-- `--model <name>` — Override Codex model (default: `gpt-5.5`, env: `CODEX_REVIEW_MODEL`)
+- `--model <name>` — Override Codex model (workflow default: `gpt-5.6-sol`, env: `CODEX_REVIEW_MODEL`)
 - `--with-opus` — Enable Opus cross-validation after Codex review
 
 ## Examples
@@ -26,7 +26,7 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 ```
 /codex-code-review:red-review
 /codex-code-review:red-review PR#123
-/codex-code-review:red-review --base develop --model gpt-4o
+/codex-code-review:red-review --base develop --model gpt-5.6-terra
 /codex-code-review:red-review --with-opus
 ```
 
