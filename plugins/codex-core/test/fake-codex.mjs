@@ -22,6 +22,7 @@ import { appendFileSync } from "node:fs";
 const TURN_DELAY = parseInt(process.env.FAKE_TURN_DELAY_MS || "200", 10);
 const TURN_TEXT = process.env.FAKE_TURN_TEXT || "Fake review output for testing.\n\n[VERDICT] - APPROVE";
 const TURN_FAIL = process.env.FAKE_TURN_FAIL || "";
+const TURN_START_REJECT = process.env.FAKE_TURN_START_REJECT || "";
 const AUTH_FAIL = !!process.env.FAKE_AUTH_FAIL;
 const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
 const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
@@ -33,6 +34,9 @@ const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.5",
 ]));
 const MODEL_LIST_UNSUPPORTED = !!process.env.FAKE_MODEL_LIST_UNSUPPORTED;
+const MODEL_PAGES = process.env.FAKE_MODEL_PAGES
+  ? JSON.parse(process.env.FAKE_MODEL_PAGES)
+  : null;
 
 const rl = createInterface({ input: process.stdin });
 
@@ -74,10 +78,12 @@ function handleRequest(msg) {
       if (MODEL_LIST_UNSUPPORTED) {
         send({ id, error: { code: -32601, message: "Method not found: model/list" } });
       } else {
+        const pageIndex = Number(params?.cursor || 0);
+        const pageModels = MODEL_PAGES ? (MODEL_PAGES[pageIndex] || []) : MODELS;
         send({
           id,
           result: {
-            data: MODELS.map((model, index) => ({
+            data: pageModels.map((model, index) => ({
               id: model,
               model,
               displayName: model,
@@ -89,7 +95,9 @@ function handleRequest(msg) {
                 { reasoningEffort: "high", description: "High" },
               ],
             })),
-            nextCursor: null,
+            nextCursor: MODEL_PAGES && pageIndex + 1 < MODEL_PAGES.length
+              ? String(pageIndex + 1)
+              : null,
           },
         });
       }
@@ -106,6 +114,14 @@ function handleRequest(msg) {
       break;
 
     case "turn/start": {
+      if (TURN_START_REJECT) {
+        let error;
+        try { error = JSON.parse(TURN_START_REJECT); }
+        catch { error = { message: TURN_START_REJECT }; }
+        send({ id, error });
+        break;
+      }
+
       // Simulate turn processing with configurable delay
       const threadId = params.threadId;
 

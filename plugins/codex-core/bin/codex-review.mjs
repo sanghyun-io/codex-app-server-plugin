@@ -232,7 +232,7 @@ class AppServerClient {
   }
 
   async listModels() {
-    return await this.request("model/list", { includeHidden: true });
+    return await listAllModels(params => this.request("model/list", params));
   }
 
   async startThread(opts = {}) {
@@ -482,7 +482,7 @@ class BrokerClient {
   }
 
   async listModels() {
-    return await this.request("model/list", { includeHidden: true });
+    return await listAllModels(params => this.request("model/list", params));
   }
 
   async startThread(opts = {}) {
@@ -791,9 +791,16 @@ function extractAppServerErrorMessage(value) {
     return String(value || "Unknown App Server error");
   }
 
-  return extractAppServerErrorMessage(
-    value.error || value.message || value.detail || JSON.stringify(value)
-  );
+  const nested = value.error ?? value.message ?? value.detail;
+  if (nested !== undefined && nested !== value) {
+    return extractAppServerErrorMessage(nested);
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function enrichUnsupportedModelError(error, model, availableModels) {
@@ -808,6 +815,29 @@ function enrichUnsupportedModelError(error, model, availableModels) {
     `Available models: ${alternatives.join(", ") || "query model/list for this account"}`,
     "No fallback was performed. Choose a supported model with --model or CODEX_REVIEW_MODEL.",
   ].join("\n"));
+}
+
+async function listAllModels(requestPage) {
+  const data = [];
+  const seenCursors = new Set();
+  let cursor = null;
+
+  do {
+    const params = { includeHidden: true };
+    if (cursor) params.cursor = cursor;
+    const result = await requestPage(params);
+    if (Array.isArray(result?.data)) data.push(...result.data);
+
+    const nextCursor = result?.nextCursor;
+    if (!nextCursor) break;
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`model/list returned a repeated cursor: ${nextCursor}`);
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return { data, nextCursor: null };
 }
 
 function normalizeModelCatalog(result) {
@@ -841,7 +871,7 @@ async function validateModelAvailability(client, model) {
   }
 
   const catalog = normalizeModelCatalog(result);
-  if (catalog.accepted.size > 0 && !catalog.accepted.has(model)) {
+  if (!catalog.accepted.has(model)) {
     throw new CodexError(6, [
       `Model "${model}" is not available for the current Codex account.`,
       `Available models: ${catalog.visible.join(", ") || "none reported"}`,

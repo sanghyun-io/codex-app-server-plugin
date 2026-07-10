@@ -36,8 +36,10 @@ function cli(args, opts = {}) {
     FAKE_TURN_DELAY_MS: String(opts.turnDelay ?? 100),
     FAKE_TURN_TEXT: opts.turnText ?? "Test output.\n\n[VERDICT] - APPROVE",
     FAKE_REQUEST_LOG: opts.requestLog ?? "",
-    FAKE_MODELS: opts.models ? JSON.stringify(opts.models) : "",
+    FAKE_MODELS: opts.models !== undefined ? JSON.stringify(opts.models) : "",
+    FAKE_MODEL_PAGES: opts.modelPages ? JSON.stringify(opts.modelPages) : "",
     FAKE_MODEL_LIST_UNSUPPORTED: opts.modelListUnsupported ? "1" : "",
+    FAKE_TURN_START_REJECT: opts.turnStartReject ?? "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -229,6 +231,80 @@ describe("error handling", () => {
     assert.match(result.stderr, /No fallback was performed/);
     assert.match(result.stderr, /gpt-5\.6-terra/);
   });
+
+  it("reports a message-less structured turn rejection without recursion", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    writeFileSync(prompt, "test a structured rejection", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-sol",
+    ], {
+      turnStartReject: JSON.stringify({ code: -32000, data: { reason: "opaque" } }),
+      models: ["gpt-5.6-sol"],
+    });
+
+    assert.equal(result.exit, 6);
+    assert.match(result.stderr, /"code":-32000/);
+    assert.doesNotMatch(result.stderr, /call stack/i);
+  });
+});
+
+describe("broker model error handling", () => {
+  const ERROR_BROKER_HOME = resolve(TEST_DIR, "error_broker_home");
+  const ERROR_BROKER_TMP = resolve(ERROR_BROKER_HOME, ".claude", "tmp");
+  const ERROR_BROKER_PORT_FILE = resolve(ERROR_BROKER_TMP, "broker.port");
+
+  before(() => {
+    mkdirSync(ERROR_BROKER_TMP, { recursive: true });
+  });
+
+  after(() => {
+    if (!existsSync(ERROR_BROKER_PORT_FILE)) return;
+    try {
+      const data = readJson(ERROR_BROKER_PORT_FILE);
+      if (data?.pid) process.kill(data.pid, "SIGTERM");
+    } catch { /* already stopped */ }
+  });
+
+  it("preserves nested turn/start errors and lists model alternatives", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    writeFileSync(prompt, "test broker rejection handling", "utf8");
+    const upstreamError = {
+      type: "error",
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        message: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+      },
+    };
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-sol",
+    ], {
+      broker: true,
+      home: ERROR_BROKER_HOME,
+      turnStartReject: JSON.stringify(upstreamError),
+      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    });
+
+    assert.equal(result.exit, 6);
+    assert.match(result.stderr, /not supported/i);
+    assert.match(result.stderr, /No fallback was performed/);
+    assert.match(result.stderr, /gpt-5\.6-terra/);
+    assert.doesNotMatch(result.stderr, /\[object Object\]/);
+  });
 });
 
 describe("broker turn serialization", () => {
@@ -401,6 +477,12 @@ describe("model payload consistency", () => {
       opts: { envModel: "gpt-5.6-luna" },
       expected: "gpt-5.6-luna",
     },
+    {
+      name: "explicit model beats environment",
+      args: ["--model", "gpt-5.6-sol"],
+      opts: { envModel: "gpt-5.6-luna" },
+      expected: "gpt-5.6-sol",
+    },
   ];
 
   for (const testCase of cases) {
@@ -544,6 +626,47 @@ describe("model availability", () => {
 
     assert.equal(result.exit, 0, result.stderr);
     assert.ok(existsSync(output));
+  });
+
+  it("accepts a requested model returned on a later model/list page", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    writeFileSync(prompt, "Review with a paginated model catalog.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-luna",
+    ], {
+      modelPages: [["gpt-5.6-sol"], ["gpt-5.6-terra", "gpt-5.6-luna"]],
+    });
+
+    assert.equal(result.exit, 0, result.stderr);
+    assert.ok(existsSync(output));
+  });
+
+  it("fails closed when model/list succeeds with an empty catalog", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Review with an empty model catalog.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-sol",
+    ], { models: [], requestLog });
+
+    assert.equal(result.exit, 6);
+    assert.match(result.stderr, /none reported/);
+    const requests = readRequests(requestLog);
+    assert.equal(requests.some(request => request.method === "thread/start"), false);
   });
 });
 

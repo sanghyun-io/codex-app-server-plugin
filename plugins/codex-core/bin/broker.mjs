@@ -487,10 +487,13 @@ class BrokerServer {
             }) + "\n");
         }
       } catch (err) {
+        const serializedError = err && typeof err === "object"
+          ? { ...err, ...(err.message ? { message: err.message } : {}) }
+          : { message: String(err) };
         socket.write(JSON.stringify({
           type: "response",
           id: msg.id,
-          error: { message: err.message || String(err) },
+          error: serializedError,
         }) + "\n");
       }
     });
