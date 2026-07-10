@@ -6,6 +6,7 @@ Thumbs.db
 *.log
 *.tmp
 tmp-review*/
+.worktrees/
 
 # Claude Code local workspace
 .claude/
