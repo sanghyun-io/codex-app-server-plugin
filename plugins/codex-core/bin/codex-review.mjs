@@ -38,6 +38,7 @@ import {
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { resolveProjectRoot, sameProject } from "./lib/project-scope.mjs";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -359,6 +360,7 @@ class AppServerClient {
         {
           threadId,
           input: [{ type: "text", text: inputText }],
+          cwd: opts.cwd,
           model: opts.model || DEFAULT_MODEL,
           effort: opts.effort || "high",
         },
@@ -589,6 +591,7 @@ class BrokerClient {
         {
           threadId,
           input: [{ type: "text", text: inputText }],
+          cwd: opts.cwd,
           model: opts.model || DEFAULT_MODEL,
           effort: opts.effort || "high",
         },
@@ -887,7 +890,7 @@ async function validateModelAvailability(client, model) {
 // ---------------------------------------------------------------------------
 
 async function workerMain(parsed) {
-  const { command, positional, sessionId, reviewDir, model, modelExplicit, timeout } = parsed;
+  const { command, positional, sessionId, reviewDir, projectRoot, model, modelExplicit, timeout } = parsed;
   const promptFile = resolve(positional[0]);
   const outputFile = resolve(positional[1]);
   const promptText = readFileSync(promptFile, "utf8");
@@ -939,17 +942,32 @@ async function workerMain(parsed) {
       if (!state?.threadId) {
         throw new CodexError(4, `No active session found for ${sessionId}. Run 'start' first.`);
       }
+      if (!state.projectRoot) {
+        throw new CodexError(6, "This session predates project binding. Start a new session in the current project.");
+      }
+      if (!sameProject(state.projectRoot, projectRoot)) {
+        throw new CodexError(6, [
+          "Session belongs to a different project.",
+          `Session: ${state.projectRoot}`,
+          `Current: ${projectRoot}`,
+          "Start a new session here.",
+        ].join("\n"));
+      }
       effectiveModel = modelExplicit ? model : (state.model || model || DEFAULT_MODEL);
     }
 
     const availableModels = await validateModelAvailability(client, effectiveModel);
 
     if (command === "start") {
-      const threadResult = await client.startThread({ model: effectiveModel });
+      const threadResult = await client.startThread({ model: effectiveModel, cwd: projectRoot });
       threadId = threadResult.thread.id;
       log(`Thread created: ${threadId} (model: ${effectiveModel})`);
       saveState(reviewDir, sessionId, {
-        threadId, model: effectiveModel, createdAt: new Date().toISOString(), turnCount: 0,
+        threadId,
+        model: effectiveModel,
+        projectRoot,
+        createdAt: new Date().toISOString(),
+        turnCount: 0,
       });
     } else {
       // follow-up
@@ -971,6 +989,7 @@ async function workerMain(parsed) {
     try {
       turnResult = await client.startTurn(threadId, promptText, {
         model: effectiveModel,
+        cwd: projectRoot,
         timeout: hardTimeout,
         onDelta: (chars) => { charsReceived = chars; },
         cancelSignal: () => cancelled,
@@ -1032,7 +1051,7 @@ async function workerMain(parsed) {
 // ---------------------------------------------------------------------------
 
 function spawnWorker(parsed) {
-  const { command, positional, sessionId, reviewDir, model, modelExplicit, defaultModel, timeout } = parsed;
+  const { command, positional, sessionId, reviewDir, projectRoot, model, modelExplicit, defaultModel, timeout } = parsed;
 
   // Check if a worker is already running for this session
   const existing = readPidFile(reviewDir, sessionId);
@@ -1066,6 +1085,7 @@ function spawnWorker(parsed) {
     positional[0], positional[1],
     "--session", sessionId,
     "--review-dir", reviewDir,
+    "--cwd", projectRoot,
     "--nonce", nonce,
   ];
   if (modelExplicit) {
@@ -1476,6 +1496,7 @@ function parseArgs(argv) {
 
   let sessionId = null;
   let reviewDir = null;
+  let cwd = null;
   let model = null;
   let defaultModel = null;
   let timeout = null;
@@ -1489,6 +1510,8 @@ function parseArgs(argv) {
       sessionId = raw[++i];
     } else if (raw[i] === "--review-dir" && raw[i + 1]) {
       reviewDir = raw[++i];
+    } else if (raw[i] === "--cwd" && raw[i + 1]) {
+      cwd = raw[++i];
     } else if (raw[i] === "--model" && raw[i + 1]) {
       model = raw[++i];
     } else if (raw[i] === "--default-model" && raw[i + 1]) {
@@ -1513,6 +1536,7 @@ function parseArgs(argv) {
       positional,
       sessionId: sessionId || "",
       reviewDir: reviewDir ? resolve(reviewDir) : "",
+      projectRoot: resolveProjectRoot(cwd || process.cwd()),
       model: model || process.env.CODEX_REVIEW_MODEL || defaultModel || DEFAULT_MODEL,
       modelExplicit: model !== null,
       defaultModel,
@@ -1540,11 +1564,14 @@ function parseArgs(argv) {
     || (process.env.CODEX_REVIEW_TIMEOUT ? parseInt(process.env.CODEX_REVIEW_TIMEOUT, 10) : null)
     || DEFAULT_HARD_TIMEOUT_MS;
 
+  const projectRoot = resolveProjectRoot(cwd || process.cwd());
+
   return {
     command,
     positional,
     sessionId,
     reviewDir: resolve(reviewDir),
+    projectRoot,
     model: resolvedModel,
     modelExplicit: model !== null,
     defaultModel,

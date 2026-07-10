@@ -14,6 +14,7 @@
  *   FAKE_TAG_THREAD         — If set, prefix each delta with `[<threadId>] `
  *                              so concurrent-turn tests can distinguish streams.
  *   FAKE_DELTA_INTERVAL_MS  — Delay between delta chunks (default: 20)
+ *   FAKE_INTERRUPT_LOG      — JSONL capture for turn/interrupt params
  */
 
 import { createInterface } from "node:readline";
@@ -27,6 +28,7 @@ const AUTH_FAIL = !!process.env.FAKE_AUTH_FAIL;
 const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
 const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
 const REQUEST_LOG = process.env.FAKE_REQUEST_LOG || "";
+const INTERRUPT_LOG = process.env.FAKE_INTERRUPT_LOG || "";
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -41,6 +43,7 @@ const MODEL_PAGES = process.env.FAKE_MODEL_PAGES
 const rl = createInterface({ input: process.stdin });
 
 let threadCounter = 0;
+let turnCounter = 0;
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
@@ -49,6 +52,12 @@ function send(msg) {
 function recordRequest(msg) {
   if (REQUEST_LOG) {
     appendFileSync(REQUEST_LOG, `${JSON.stringify(msg)}\n`, "utf8");
+  }
+}
+
+function recordInterrupt(params) {
+  if (INTERRUPT_LOG) {
+    appendFileSync(INTERRUPT_LOG, `${JSON.stringify(params)}\n`, "utf8");
   }
 }
 
@@ -124,10 +133,22 @@ function handleRequest(msg) {
 
       // Simulate turn processing with configurable delay
       const threadId = params.threadId;
+      const turnId = `fake-turn-${++turnCounter}`;
+
+      send({
+        id,
+        result: { turn: { id: turnId, status: "inProgress", items: [], error: null } },
+      });
 
       setTimeout(() => {
         if (TURN_FAIL) {
-          send({ method: "turn/completed", params: { turn: { status: "failed", error: { message: TURN_FAIL } } } });
+          send({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: { id: turnId, status: "failed", items: [], error: { message: TURN_FAIL } },
+            },
+          });
           return;
         }
 
@@ -139,19 +160,40 @@ function handleRequest(msg) {
         let delay = 0;
         for (const chunk of chunks) {
           setTimeout(() => {
-            send({ method: "item/agentMessage/delta", params: { delta: chunk } });
+            send({
+              method: "item/agentMessage/delta",
+              params: { threadId, turnId, itemId: `item-${turnId}`, delta: chunk },
+            });
           }, delay);
           delay += DELTA_INTERVAL_MS;
         }
 
         // Send completion after all deltas
         setTimeout(() => {
-          send({ method: "turn/completed", params: { turn: { status: "completed" } } });
+          send({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: { id: turnId, status: "completed", items: [], error: null },
+            },
+          });
         }, delay + 50);
       }, TURN_DELAY);
 
       break;
     }
+
+    case "turn/interrupt":
+      recordInterrupt(params);
+      send({ id, result: {} });
+      send({
+        method: "turn/completed",
+        params: {
+          threadId: params.threadId,
+          turn: { id: params.turnId, status: "interrupted", items: [], error: null },
+        },
+      });
+      break;
 
     default:
       send({ id, error: { code: -32601, message: `Unknown method: ${method}` } });

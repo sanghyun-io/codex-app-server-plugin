@@ -11,7 +11,7 @@ import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, rmSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, realpathSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,7 @@ function cli(args, opts = {}) {
     FAKE_MODEL_PAGES: opts.modelPages ? JSON.stringify(opts.modelPages) : "",
     FAKE_MODEL_LIST_UNSUPPORTED: opts.modelListUnsupported ? "1" : "",
     FAKE_TURN_START_REJECT: opts.turnStartReject ?? "",
+    FAKE_INTERRUPT_LOG: opts.interruptLog ?? "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -47,7 +48,7 @@ function cli(args, opts = {}) {
   };
   try {
     const stdout = execFileSync(process.execPath, [CLI, ...args], {
-      env, timeout: opts.timeout ?? 15_000, encoding: "utf8",
+      env, cwd: opts.cwd, timeout: opts.timeout ?? 15_000, encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
     return { exit: 0, stdout, stderr: "" };
@@ -64,6 +65,9 @@ function readRequests(p) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map(line => JSON.parse(line));
+}
+function requestsByMethod(path, method) {
+  return readRequests(path).filter(request => request.method === method);
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -118,6 +122,96 @@ describe("foreground mode", () => {
     cli(["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR, "--foreground"]);
     cli(["close", "--session", sid, "--review-dir", TEST_DIR]);
     assert.ok(!existsSync(resolve(TEST_DIR, `${sid}_state.json`)));
+  });
+});
+
+describe("project binding", () => {
+  let repoA, repoB, reviewDir;
+
+  beforeEach(() => {
+    const root = resolve(TEST_DIR, `projects_${Date.now()}_${++sessionCounter}`);
+    repoA = resolve(root, "repo-a");
+    repoB = resolve(root, "repo-b");
+    reviewDir = resolve(root, "reviews");
+    for (const repo of [repoA, repoB]) {
+      mkdirSync(repo, { recursive: true });
+      execFileSync("git", ["init", "--quiet"], { cwd: repo });
+    }
+    mkdirSync(reviewDir, { recursive: true });
+  });
+
+  it("sends the canonical project root to thread and turn and persists it", () => {
+    const sid = newSid();
+    const prompt = resolve(reviewDir, `${sid}_prompt.txt`);
+    const output = resolve(reviewDir, `${sid}_output.txt`);
+    const requestLog = resolve(reviewDir, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Review this project.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", reviewDir,
+      "--foreground",
+    ], { cwd: repoA, requestLog });
+
+    assert.equal(result.exit, 0, result.stderr);
+    const expectedRoot = realpathSync.native(repoA);
+    assert.equal(requestsByMethod(requestLog, "thread/start")[0]?.params?.cwd, expectedRoot);
+    assert.equal(requestsByMethod(requestLog, "turn/start")[0]?.params?.cwd, expectedRoot);
+    assert.equal(readJson(resolve(reviewDir, `${sid}_state.json`)).projectRoot, expectedRoot);
+  });
+
+  it("rejects follow-up from a different project before thread resume", () => {
+    const sid = newSid();
+    const prompt = resolve(reviewDir, `${sid}_prompt.txt`);
+    const output = resolve(reviewDir, `${sid}_output.txt`);
+    writeFileSync(prompt, "Start in repo A.", "utf8");
+    const started = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", reviewDir,
+      "--foreground",
+    ], { cwd: repoA });
+    assert.equal(started.exit, 0, started.stderr);
+
+    const followPrompt = resolve(reviewDir, `${sid}_follow_prompt.txt`);
+    const followOutput = resolve(reviewDir, `${sid}_follow_output.txt`);
+    const requestLog = resolve(reviewDir, `${sid}_follow_requests.jsonl`);
+    writeFileSync(followPrompt, "Continue from repo B.", "utf8");
+    const followed = cli([
+      "follow-up", followPrompt, followOutput,
+      "--session", sid,
+      "--review-dir", reviewDir,
+      "--foreground",
+    ], { cwd: repoB, requestLog });
+
+    assert.equal(followed.exit, 6);
+    assert.match(followed.stderr, /different project/i);
+    assert.equal(requestsByMethod(requestLog, "thread/resume").length, 0);
+  });
+
+  it("rejects legacy state without a project root before thread resume", () => {
+    const sid = newSid();
+    const prompt = resolve(reviewDir, `${sid}_prompt.txt`);
+    const output = resolve(reviewDir, `${sid}_output.txt`);
+    const requestLog = resolve(reviewDir, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Continue legacy state.", "utf8");
+    writeFileSync(resolve(reviewDir, `${sid}_state.json`), JSON.stringify({
+      threadId: "legacy-thread",
+      model: "gpt-5.6-terra",
+      turnCount: 1,
+    }), "utf8");
+
+    const result = cli([
+      "follow-up", prompt, output,
+      "--session", sid,
+      "--review-dir", reviewDir,
+      "--foreground",
+    ], { cwd: repoA, requestLog });
+
+    assert.equal(result.exit, 6);
+    assert.match(result.stderr, /predates project binding/i);
+    assert.equal(requestsByMethod(requestLog, "thread/resume").length, 0);
   });
 });
 
