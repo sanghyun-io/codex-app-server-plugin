@@ -17,6 +17,7 @@
  */
 
 import { createInterface } from "node:readline";
+import { appendFileSync } from "node:fs";
 
 const TURN_DELAY = parseInt(process.env.FAKE_TURN_DELAY_MS || "200", 10);
 const TURN_TEXT = process.env.FAKE_TURN_TEXT || "Fake review output for testing.\n\n[VERDICT] - APPROVE";
@@ -24,6 +25,14 @@ const TURN_FAIL = process.env.FAKE_TURN_FAIL || "";
 const AUTH_FAIL = !!process.env.FAKE_AUTH_FAIL;
 const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
 const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
+const REQUEST_LOG = process.env.FAKE_REQUEST_LOG || "";
+const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+]));
+const MODEL_LIST_UNSUPPORTED = !!process.env.FAKE_MODEL_LIST_UNSUPPORTED;
 
 const rl = createInterface({ input: process.stdin });
 
@@ -33,8 +42,15 @@ function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
+function recordRequest(msg) {
+  if (REQUEST_LOG) {
+    appendFileSync(REQUEST_LOG, `${JSON.stringify(msg)}\n`, "utf8");
+  }
+}
+
 function handleRequest(msg) {
   const { method, id, params } = msg;
+  recordRequest(msg);
 
   switch (method) {
     case "initialize":
@@ -49,6 +65,31 @@ function handleRequest(msg) {
           id,
           result: {
             account: { email: "test@example.com", type: "individual", planType: "free" },
+          },
+        });
+      }
+      break;
+
+    case "model/list":
+      if (MODEL_LIST_UNSUPPORTED) {
+        send({ id, error: { code: -32601, message: "Method not found: model/list" } });
+      } else {
+        send({
+          id,
+          result: {
+            data: MODELS.map((model, index) => ({
+              id: model,
+              model,
+              displayName: model,
+              description: "Fake model",
+              hidden: false,
+              isDefault: index === 0,
+              defaultReasoningEffort: "high",
+              supportedReasoningEfforts: [
+                { reasoningEffort: "high", description: "High" },
+              ],
+            })),
+            nextCursor: null,
           },
         });
       }

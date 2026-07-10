@@ -43,7 +43,7 @@ import { randomBytes } from "node:crypto";
 // Config
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MODEL = "gpt-5.5";
+const DEFAULT_MODEL = "gpt-5.6-terra";
 const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
@@ -229,6 +229,10 @@ class AppServerClient {
       throw new CodexError(2, "Not authenticated. Run 'codex login' first.");
     }
     return account;
+  }
+
+  async listModels() {
+    return await this.request("model/list", { includeHidden: true });
   }
 
   async startThread(opts = {}) {
@@ -475,6 +479,10 @@ class BrokerClient {
     // Broker already checked auth on startup — ping to verify connection
     this.send({ action: "ping" });
     return { email: "broker-cached", type: "broker" };
+  }
+
+  async listModels() {
+    return await this.request("model/list", { includeHidden: true });
   }
 
   async startThread(opts = {}) {
@@ -770,6 +778,48 @@ function log(msg) {
   process.stderr.write(`[codex-review] ${msg}\n`);
 }
 
+function normalizeModelCatalog(result) {
+  const entries = Array.isArray(result?.data) ? result.data : [];
+  const accepted = new Set();
+  const visible = [];
+
+  for (const entry of entries) {
+    for (const value of [entry?.id, entry?.model]) {
+      if (typeof value === "string" && value.trim()) {
+        accepted.add(value.trim());
+      }
+    }
+
+    const display = entry?.model || entry?.id;
+    if (!entry?.hidden && typeof display === "string" && !visible.includes(display)) {
+      visible.push(display);
+    }
+  }
+
+  return { accepted, visible };
+}
+
+async function validateModelAvailability(client, model) {
+  let result;
+  try {
+    result = await client.listModels();
+  } catch (err) {
+    log(`Warning: could not validate model availability (${err?.message || JSON.stringify(err)}); continuing without preflight validation.`);
+    return [];
+  }
+
+  const catalog = normalizeModelCatalog(result);
+  if (catalog.accepted.size > 0 && !catalog.accepted.has(model)) {
+    throw new CodexError(6, [
+      `Model "${model}" is not available for the current Codex account.`,
+      `Available models: ${catalog.visible.join(", ") || "none reported"}`,
+      "No fallback was performed. Choose a supported model with --model or CODEX_REVIEW_MODEL.",
+    ].join("\n"));
+  }
+
+  return catalog.visible;
+}
+
 // ---------------------------------------------------------------------------
 // Worker — runs as a detached child process
 // ---------------------------------------------------------------------------
@@ -820,22 +870,28 @@ async function workerMain(parsed) {
 
     let threadId;
     let effectiveModel = model;
+    let state = null;
 
-    if (command === "start") {
-      const threadResult = await client.startThread({ model });
-      threadId = threadResult.thread.id;
-      log(`Thread created: ${threadId} (model: ${model})`);
-      saveState(reviewDir, sessionId, {
-        threadId, model, createdAt: new Date().toISOString(), turnCount: 0,
-      });
-    } else {
-      // follow-up
-      const state = loadState(reviewDir, sessionId);
+    if (command !== "start") {
+      state = loadState(reviewDir, sessionId);
       if (!state?.threadId) {
         throw new CodexError(4, `No active session found for ${sessionId}. Run 'start' first.`);
       }
+      effectiveModel = modelExplicit ? model : (state.model || model || DEFAULT_MODEL);
+    }
+
+    await validateModelAvailability(client, effectiveModel);
+
+    if (command === "start") {
+      const threadResult = await client.startThread({ model: effectiveModel });
+      threadId = threadResult.thread.id;
+      log(`Thread created: ${threadId} (model: ${effectiveModel})`);
+      saveState(reviewDir, sessionId, {
+        threadId, model: effectiveModel, createdAt: new Date().toISOString(), turnCount: 0,
+      });
+    } else {
+      // follow-up
       threadId = state.threadId;
-      effectiveModel = modelExplicit ? model : (state.model || DEFAULT_MODEL);
       await client.resumeThread(threadId);
       log(`Thread resumed: ${threadId} (model: ${effectiveModel})`);
     }
@@ -848,6 +904,7 @@ async function workerMain(parsed) {
     }, PROGRESS_INTERVAL_MS);
 
     // Execute turn
+    log(`Starting turn (model: ${effectiveModel})`);
     const turnResult = await client.startTurn(threadId, promptText, {
       model: effectiveModel,
       timeout: hardTimeout,
@@ -863,10 +920,10 @@ async function workerMain(parsed) {
     writeFileSync(outputFile, turnResult.text, "utf8");
 
     // Update state
-    const state = loadState(reviewDir, sessionId);
-    if (state) {
-      state.turnCount = (state.turnCount || 0) + 1;
-      saveState(reviewDir, sessionId, state);
+    const updatedState = loadState(reviewDir, sessionId);
+    if (updatedState) {
+      updatedState.turnCount = (updatedState.turnCount || 0) + 1;
+      saveState(reviewDir, sessionId, updatedState);
     }
 
     // Final progress
@@ -908,7 +965,7 @@ async function workerMain(parsed) {
 // ---------------------------------------------------------------------------
 
 function spawnWorker(parsed) {
-  const { command, positional, sessionId, reviewDir, model, modelExplicit, timeout } = parsed;
+  const { command, positional, sessionId, reviewDir, model, modelExplicit, defaultModel, timeout } = parsed;
 
   // Check if a worker is already running for this session
   const existing = readPidFile(reviewDir, sessionId);
@@ -946,6 +1003,9 @@ function spawnWorker(parsed) {
   ];
   if (modelExplicit) {
     workerArgs.push("--model", model);
+  }
+  if (defaultModel) {
+    workerArgs.push("--default-model", defaultModel);
   }
   if (timeout) {
     workerArgs.push("--timeout", String(timeout));
@@ -1350,6 +1410,7 @@ function parseArgs(argv) {
   let sessionId = null;
   let reviewDir = null;
   let model = null;
+  let defaultModel = null;
   let timeout = null;
   let nonce = null;
   let foreground = false;
@@ -1363,6 +1424,8 @@ function parseArgs(argv) {
       reviewDir = raw[++i];
     } else if (raw[i] === "--model" && raw[i + 1]) {
       model = raw[++i];
+    } else if (raw[i] === "--default-model" && raw[i + 1]) {
+      defaultModel = raw[++i];
     } else if (raw[i] === "--timeout" && raw[i + 1]) {
       timeout = parseInt(raw[++i], 10);
     } else if (raw[i] === "--nonce" && raw[i + 1]) {
@@ -1383,8 +1446,9 @@ function parseArgs(argv) {
       positional,
       sessionId: sessionId || "",
       reviewDir: reviewDir ? resolve(reviewDir) : "",
-      model: model || process.env.CODEX_REVIEW_MODEL || DEFAULT_MODEL,
+      model: model || process.env.CODEX_REVIEW_MODEL || defaultModel || DEFAULT_MODEL,
       modelExplicit: model !== null,
+      defaultModel,
       timeout: DEFAULT_HARD_TIMEOUT_MS,
       nonce,
       foreground,
@@ -1404,7 +1468,7 @@ function parseArgs(argv) {
   }
 
   // Resolve with env vars / defaults
-  const resolvedModel = model || process.env.CODEX_REVIEW_MODEL || DEFAULT_MODEL;
+  const resolvedModel = model || process.env.CODEX_REVIEW_MODEL || defaultModel || DEFAULT_MODEL;
   const resolvedTimeout = timeout
     || (process.env.CODEX_REVIEW_TIMEOUT ? parseInt(process.env.CODEX_REVIEW_TIMEOUT, 10) : null)
     || DEFAULT_HARD_TIMEOUT_MS;
@@ -1416,6 +1480,7 @@ function parseArgs(argv) {
     reviewDir: resolve(reviewDir),
     model: resolvedModel,
     modelExplicit: model !== null,
+    defaultModel,
     timeout: resolvedTimeout,
     nonce,
     foreground,

@@ -32,8 +32,12 @@ function cli(args, opts = {}) {
   const env = {
     ...baseEnv,
     CODEX_BINARY: FAKE_CODEX,
+    CODEX_REVIEW_MODEL: opts.envModel ?? "",
     FAKE_TURN_DELAY_MS: String(opts.turnDelay ?? 100),
     FAKE_TURN_TEXT: opts.turnText ?? "Test output.\n\n[VERDICT] - APPROVE",
+    FAKE_REQUEST_LOG: opts.requestLog ?? "",
+    FAKE_MODELS: opts.models ? JSON.stringify(opts.models) : "",
+    FAKE_MODEL_LIST_UNSUPPORTED: opts.modelListUnsupported ? "1" : "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -51,6 +55,14 @@ function cli(args, opts = {}) {
 }
 
 function readJson(p) { return JSON.parse(readFileSync(p, "utf8")); }
+function readRequests(p) {
+  if (!existsSync(p)) return [];
+  return readFileSync(p, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
+}
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ---- Setup ----
@@ -312,26 +324,210 @@ describe("broker turn serialization", () => {
   });
 });
 
+describe("model payload consistency", () => {
+  const MODEL_BROKER_HOME = resolve(TEST_DIR, "model_broker_home");
+  const MODEL_BROKER_TMP = resolve(MODEL_BROKER_HOME, ".claude", "tmp");
+  const MODEL_BROKER_PORT_FILE = resolve(MODEL_BROKER_TMP, "broker.port");
+
+  before(() => {
+    mkdirSync(MODEL_BROKER_TMP, { recursive: true });
+  });
+
+  after(() => {
+    if (!existsSync(MODEL_BROKER_PORT_FILE)) return;
+    try {
+      const data = readJson(MODEL_BROKER_PORT_FILE);
+      if (data?.pid) process.kill(data.pid, "SIGTERM");
+    } catch { /* already stopped */ }
+  });
+
+  const cases = [
+    { name: "wrapper default", args: [], opts: {}, expected: "gpt-5.6-terra" },
+    {
+      name: "explicit model",
+      args: ["--model", "gpt-5.6-sol"],
+      opts: {},
+      expected: "gpt-5.6-sol",
+    },
+    {
+      name: "environment model",
+      args: [],
+      opts: { envModel: "gpt-5.6-luna" },
+      expected: "gpt-5.6-luna",
+    },
+    {
+      name: "workflow default",
+      args: ["--default-model", "gpt-5.6-sol"],
+      opts: {},
+      expected: "gpt-5.6-sol",
+    },
+    {
+      name: "environment beats workflow default",
+      args: ["--default-model", "gpt-5.6-sol"],
+      opts: { envModel: "gpt-5.6-luna" },
+      expected: "gpt-5.6-luna",
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`sends ${testCase.name} to thread/start and turn/start`, () => {
+      const sid = newSid();
+      const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+      const output = resolve(TEST_DIR, `${sid}_o.txt`);
+      const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+      writeFileSync(prompt, "Review this code.", "utf8");
+
+      const result = cli([
+        "start", prompt, output,
+        "--session", sid,
+        "--review-dir", TEST_DIR,
+        "--foreground",
+        ...testCase.args,
+      ], { ...testCase.opts, requestLog });
+
+      assert.equal(result.exit, 0, result.stderr);
+      const requests = readRequests(requestLog);
+      const threadStart = requests.find(request => request.method === "thread/start");
+      const turnStart = requests.find(request => request.method === "turn/start");
+      assert.equal(threadStart?.params?.model, testCase.expected);
+      assert.equal(turnStart?.params?.model, testCase.expected);
+    });
+  }
+
+  it("preserves an explicit model through the broker boundary", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_broker_requests.jsonl`);
+    writeFileSync(prompt, "Review this code through the broker.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-sol",
+    ], {
+      broker: true,
+      home: MODEL_BROKER_HOME,
+      requestLog,
+    });
+
+    assert.equal(result.exit, 0, result.stderr);
+    const requests = readRequests(requestLog);
+    assert.equal(
+      requests.find(request => request.method === "thread/start")?.params?.model,
+      "gpt-5.6-sol"
+    );
+    assert.equal(
+      requests.find(request => request.method === "turn/start")?.params?.model,
+      "gpt-5.6-sol"
+    );
+  });
+});
+
+describe("model availability", () => {
+  it("fails before thread creation and lists available models", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Review with an unavailable model.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "unavailable-model",
+    ], {
+      requestLog,
+      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    });
+
+    assert.equal(result.exit, 6);
+    assert.match(result.stderr, /not available/i);
+    assert.match(result.stderr, /gpt-5\.6-sol/);
+    assert.match(result.stderr, /gpt-5\.6-terra/);
+    const requests = readRequests(requestLog);
+    assert.equal(requests.some(request => request.method === "thread/start"), false);
+    assert.equal(requests.some(request => request.method === "turn/start"), false);
+  });
+
+  it("continues when model/list is unsupported", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Review through a legacy App Server.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "legacy-model",
+    ], { requestLog, modelListUnsupported: true });
+
+    assert.equal(result.exit, 0, result.stderr);
+    assert.ok(existsSync(output));
+  });
+});
+
 describe("model reuse fix (#2)", () => {
   it("follow-up without --model preserves state.model", () => {
     const sid = newSid();
     const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
     const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
     writeFileSync(prompt, "test", "utf8");
 
     // Start with explicit model
-    cli(["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR, "--foreground", "--model", "custom-model"]);
+    cli(
+      ["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR, "--foreground", "--model", "gpt-5.6-sol"],
+      { requestLog }
+    );
     const state1 = readJson(resolve(TEST_DIR, `${sid}_state.json`));
-    assert.equal(state1.model, "custom-model");
+    assert.equal(state1.model, "gpt-5.6-sol");
 
     // Follow-up without --model
     const fu_p = resolve(TEST_DIR, `${sid}_fu.txt`);
     const fu_o = resolve(TEST_DIR, `${sid}_fuo.txt`);
     writeFileSync(fu_p, "follow-up", "utf8");
-    cli(["follow-up", fu_p, fu_o, "--session", sid, "--review-dir", TEST_DIR, "--foreground"]);
+    cli(
+      ["follow-up", fu_p, fu_o, "--session", sid, "--review-dir", TEST_DIR, "--foreground"],
+      { requestLog }
+    );
 
-    // State model should remain custom-model (not overwritten by default)
+    // State and the actual follow-up request should keep the original model.
     const state2 = readJson(resolve(TEST_DIR, `${sid}_state.json`));
-    assert.equal(state2.model, "custom-model", "Model should be preserved from initial start");
+    assert.equal(state2.model, "gpt-5.6-sol", "Model should be preserved from initial start");
+    const turnRequests = readRequests(requestLog).filter(request => request.method === "turn/start");
+    assert.equal(turnRequests.at(-1)?.params?.model, "gpt-5.6-sol");
+  });
+
+  it("preserves gpt-5.5 for an existing follow-up session", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "start an older session", "utf8");
+
+    cli(
+      ["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR, "--foreground", "--model", "gpt-5.5"],
+      { requestLog }
+    );
+
+    const followPrompt = resolve(TEST_DIR, `${sid}_fu.txt`);
+    const followOutput = resolve(TEST_DIR, `${sid}_fuo.txt`);
+    writeFileSync(followPrompt, "continue the older session", "utf8");
+    const result = cli(
+      ["follow-up", followPrompt, followOutput, "--session", sid, "--review-dir", TEST_DIR, "--foreground"],
+      { requestLog }
+    );
+
+    assert.equal(result.exit, 0, result.stderr);
+    const turnRequests = readRequests(requestLog).filter(request => request.method === "turn/start");
+    assert.equal(turnRequests.at(-1)?.params?.model, "gpt-5.5");
   });
 });
