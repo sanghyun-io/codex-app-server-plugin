@@ -371,6 +371,7 @@ class AppServerClient {
       ).then((result) => {
         turnId = result?.turn?.id || null;
         if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
+        else opts.onStarted?.(turnId);
       }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
@@ -395,6 +396,7 @@ class AppServerClient {
 const BROKER_HOME = process.env.HOME || process.env.USERPROFILE || "";
 const BROKER_TMP = resolve(BROKER_HOME, ".claude", "tmp");
 const BROKER_PORT_FILE = resolve(BROKER_TMP, "broker.port");
+const BROKER_START_LOCK = resolve(BROKER_TMP, "broker.start.lock");
 const BROKER_SCRIPT = resolve(dirname(SELF), "broker.mjs");
 
 class BrokerClient {
@@ -404,13 +406,21 @@ class BrokerClient {
     this.msgId = 0;
     this.pendingRequests = new Map();
     this.notificationHandlers = new Map();
+    this.subscribedMethods = [];
+    this.disconnectHandlers = new Set();
+    this.connectionActive = false;
+    this.disconnectNotified = false;
   }
 
   nextId() { return ++this.msgId; }
 
   async connect(port) {
     return new Promise((resolveP, rejectP) => {
+      let settled = false;
+      this.disconnectNotified = false;
       this.socket = createConnection({ host: "127.0.0.1", port }, () => {
+        settled = true;
+        this.connectionActive = true;
         this.rl = createInterface({ input: this.socket });
         this.rl.on("line", (line) => {
           let msg;
@@ -420,9 +430,32 @@ class BrokerClient {
         resolveP();
       });
       this.socket.on("error", (err) => {
-        rejectP(new Error(`Broker connection failed: ${err.message}`));
+        if (!settled) {
+          settled = true;
+          rejectP(new Error(`Broker connection failed: ${err.message}`));
+        } else {
+          this._handleDisconnect(err);
+        }
+      });
+      this.socket.on("close", () => {
+        if (this.connectionActive) this._handleDisconnect(new Error("Broker connection closed"));
       });
     });
+  }
+
+  _handleDisconnect(error) {
+    if (this.disconnectNotified) return;
+    this.disconnectNotified = true;
+    this.connectionActive = false;
+    const wrapped = new CodexError(6, `Broker disconnected: ${error?.message || error}`);
+    for (const [, pending] of this.pendingRequests) pending.reject(wrapped);
+    this.pendingRequests.clear();
+    for (const handler of this.disconnectHandlers) handler(wrapped);
+  }
+
+  onDisconnect(handler) {
+    this.disconnectHandlers.add(handler);
+    return () => this.disconnectHandlers.delete(handler);
   }
 
   _handleMessage(msg) {
@@ -464,12 +497,43 @@ class BrokerClient {
     });
   }
 
+  localRequest(action, params = {}, timeoutMs = INIT_TIMEOUT_MS) {
+    return new Promise((resolveP, rejectP) => {
+      const id = this.nextId();
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        rejectP(new CodexError(5, `Broker action ${action} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingRequests.set(id, {
+        resolve: (result) => { clearTimeout(timer); resolveP(result); },
+        reject: (error) => { clearTimeout(timer); rejectP(error); },
+      });
+      this.send({ action, id, ...params });
+    });
+  }
+
   notify(method, params) {
     this.send({ action: "notify", method, params: params || {} });
   }
 
   subscribe(methods = ["*"]) {
+    this.subscribedMethods = [...methods];
     this.send({ action: "subscribe", methods });
+  }
+
+  async reconnect() {
+    const portData = readJson(BROKER_PORT_FILE);
+    if (!portData?.port) throw new CodexError(6, "Broker port file is unavailable during reconnect");
+    if (this.rl) { try { this.rl.close(); } catch { /* ignore */ } }
+    if (this.socket) { try { this.socket.destroy(); } catch { /* ignore */ } }
+    this.rl = null;
+    this.socket = null;
+    await this.connect(portData.port);
+    if (this.subscribedMethods.length) this.subscribe(this.subscribedMethods);
+  }
+
+  async attachTurn(threadId, turnId) {
+    return await this.localRequest("turn/attach", { threadId, turnId });
   }
 
   onNotification(method, handler) {
@@ -518,16 +582,20 @@ class BrokerClient {
     const cancelSignal = opts.cancelSignal || (() => false);
 
     // Subscribe to turn notifications
-    this.subscribe(["item/agentMessage/delta", "turn/completed", "error"]);
+    this.subscribe(["item/agentMessage/delta", "turn/completed", "broker/turn-failed", "error"]);
 
     return new Promise((resolveP, rejectP) => {
       let agentText = "";
       let resolved = false;
       let turnId = null;
+      let reconnectCount = 0;
+      let reconnecting = false;
+      const reconnectDelays = [250, 1000, 2000];
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (cancelChecker) clearInterval(cancelChecker);
+        removeDisconnectHandler();
         for (const [, pending] of this.pendingRequests) {
           pending.resolve(null);
         }
@@ -538,7 +606,7 @@ class BrokerClient {
         if (resolved) return;
         resolved = true;
         cleanup();
-        resolveP(result);
+        resolveP({ ...result, turnId, reconnectCount });
       };
 
       const fail = (err) => {
@@ -547,6 +615,42 @@ class BrokerClient {
         cleanup();
         rejectP(err);
       };
+
+      const handleDisconnect = async () => {
+        if (resolved || reconnecting) return;
+        if (!turnId) {
+          fail(new CodexError(6, "Broker disconnected before the turn id was received"));
+          return;
+        }
+        reconnecting = true;
+        let lastError = null;
+        for (const delayMs of reconnectDelays) {
+          await sleep(delayMs);
+          try {
+            await this.reconnect();
+            const snapshot = await this.attachTurn(threadId, turnId);
+            agentText = snapshot?.text || "";
+            reconnectCount += 1;
+            opts.onReconnect?.(reconnectCount, agentText.length);
+            reconnecting = false;
+            if (snapshot?.status && snapshot.status !== "inProgress") {
+              finish({
+                text: agentText,
+                status: snapshot.status === "interrupted" ? "cancelled" : snapshot.status,
+              });
+            }
+            return;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        finish({
+          text: agentText,
+          status: "connection_failed_partial",
+          error: lastError?.message || String(lastError || "Broker reconnect failed"),
+        });
+      };
+      const removeDisconnectHandler = this.onDisconnect(handleDisconnect);
 
       const hardTimer = timeoutMs > 0
         ? setTimeout(() => {
@@ -608,15 +712,28 @@ class BrokerClient {
       ).then((result) => {
         turnId = result?.turn?.id || null;
         if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
+        else opts.onStarted?.(turnId);
       }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
+      });
+
+      this.onNotification("broker/turn-failed", (params) => {
+        if (params?.threadId !== threadId || !turnId || params?.turnId !== turnId) return;
+        finish({
+          text: agentText,
+          status: "connection_failed_partial",
+          error: params?.error?.message || "App server exited unexpectedly",
+        });
       });
     });
   }
 
   close() {
+    this.connectionActive = false;
+    this.disconnectNotified = true;
     this.notificationHandlers.clear();
     this.pendingRequests.clear();
+    this.disconnectHandlers.clear();
     if (this.rl) { this.rl.close(); this.rl = null; }
     if (this.socket) {
       try { this.socket.destroy(); } catch { /* ignore */ }
@@ -632,8 +749,7 @@ class BrokerClient {
  * Returns a connected BrokerClient, or null if broker is unavailable
  * (caller should fall back to direct AppServerClient).
  */
-async function connectOrStartBroker() {
-  // Check for existing broker
+async function connectExistingBroker() {
   if (existsSync(BROKER_PORT_FILE)) {
     const portData = readJson(BROKER_PORT_FILE);
     if (portData?.port && portData?.pid) {
@@ -652,6 +768,21 @@ async function connectOrStartBroker() {
       }
     }
   }
+  return null;
+}
+
+async function waitForBrokerReady() {
+  for (let i = 0; i < 60; i++) {
+    await sleep(250);
+    const client = await connectExistingBroker();
+    if (client) return client;
+  }
+  return null;
+}
+
+async function connectOrStartBroker(retryCount = 0) {
+  const existing = await connectExistingBroker();
+  if (existing) return existing;
 
   // Start new broker
   if (!existsSync(BROKER_SCRIPT)) {
@@ -663,39 +794,50 @@ async function connectOrStartBroker() {
     mkdirSync(BROKER_TMP, { recursive: true });
   }
 
-  log("Starting new broker...");
-  const logPath = resolve(BROKER_TMP, "broker.log");
-  const logFd = openSync(logPath, "w");
-
-  const brokerProc = spawn(process.execPath, [BROKER_SCRIPT], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: process.env,
-    windowsHide: true,
-  });
-  brokerProc.unref();
-  closeSync(logFd);
-
-  // Wait for broker to write port file (up to 15s)
-  for (let i = 0; i < 30; i++) {
-    await sleep(500);
-    if (existsSync(BROKER_PORT_FILE)) {
-      const portData = readJson(BROKER_PORT_FILE);
-      if (portData?.port) {
-        try {
-          const client = new BrokerClient();
-          await client.connect(portData.port);
-          log(`Connected to new broker on port ${portData.port}`);
-          return client;
-        } catch {
-          // Broker not ready yet, keep waiting
-        }
-      }
-    }
+  let ownsStartLock = false;
+  try {
+    const lockFd = openSync(BROKER_START_LOCK, "wx");
+    writeFileSync(lockFd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), "utf8");
+    closeSync(lockFd);
+    ownsStartLock = true;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
   }
 
-  log("Broker startup timeout, falling back to direct connection");
-  return null;
+  if (!ownsStartLock) {
+    log("Another worker is starting the broker; waiting for readiness");
+    const client = await waitForBrokerReady();
+    if (client) return client;
+    const lock = readJson(BROKER_START_LOCK);
+    if (retryCount === 0 && (!lock?.pid || !isAlive(lock.pid))) {
+      removeFile(BROKER_START_LOCK);
+      return await connectOrStartBroker(1);
+    }
+    log("Broker startup owner did not become ready; falling back to direct connection");
+    return null;
+  }
+
+  try {
+    log("Starting new broker...");
+    const logPath = resolve(BROKER_TMP, "broker.log");
+    const logFd = openSync(logPath, "w");
+
+    const brokerProc = spawn(process.execPath, [BROKER_SCRIPT], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: process.env,
+      windowsHide: true,
+    });
+    brokerProc.unref();
+    closeSync(logFd);
+
+    const client = await waitForBrokerReady();
+    if (client) return client;
+    log("Broker startup timeout, falling back to direct connection");
+    return null;
+  } finally {
+    removeFile(BROKER_START_LOCK);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -911,6 +1053,8 @@ async function workerMain(parsed) {
 
   let cancelled = false;
   let charsReceived = 0;
+  let activeTurnId = null;
+  let reconnectCount = 0;
 
   // Graceful cancel on SIGTERM
   process.on("SIGTERM", () => { cancelled = true; });
@@ -992,7 +1136,7 @@ async function workerMain(parsed) {
 
     // Periodic progress file updates
     const progressTimer = setInterval(() => {
-      progress("running", { threadId });
+      progress("running", { threadId, turnId: activeTurnId, reconnectCount });
     }, PROGRESS_INTERVAL_MS);
 
     // Execute turn
@@ -1004,6 +1148,15 @@ async function workerMain(parsed) {
         cwd: projectRoot,
         timeout: hardTimeout,
         onDelta: (chars) => { charsReceived = chars; },
+        onStarted: (turnId) => {
+          activeTurnId = turnId;
+          progress("running", { threadId, turnId, reconnectCount });
+        },
+        onReconnect: (count, chars) => {
+          reconnectCount = count;
+          charsReceived = chars;
+          progress("reconnecting", { threadId, turnId: activeTurnId, reconnectCount });
+        },
         cancelSignal: () => cancelled,
       });
     } catch (err) {
@@ -1028,12 +1181,17 @@ async function workerMain(parsed) {
     const finalStatus =
       turnResult.status === "cancelled" ? "cancelled" :
       turnResult.status === "timeout_partial" ? "timeout_partial" :
+      turnResult.status === "connection_failed_partial" ? "failed" :
       "completed";
 
     progress(finalStatus, {
       charsReceived: turnResult.text.length,
       completedAt: new Date().toISOString(),
       outputFile,
+      threadId,
+      turnId: activeTurnId || turnResult.turnId || null,
+      reconnectCount: turnResult.reconnectCount ?? reconnectCount,
+      ...(turnResult.error ? { error: turnResult.error, exitCode: 6 } : {}),
     });
 
     if (finalStatus === "cancelled") {
@@ -1042,6 +1200,10 @@ async function workerMain(parsed) {
     if (finalStatus === "timeout_partial") {
       log(`Hard timeout reached. Partial output saved (${turnResult.text.length} chars).`);
       process.exit(5);
+    }
+    if (finalStatus === "failed") {
+      log(`Connection failed. Partial output saved (${turnResult.text.length} chars).`);
+      process.exit(6);
     }
 
   } catch (err) {
@@ -1206,7 +1368,7 @@ function cmdStatus(parsed) {
   const pidAlive = pid ? isOurWorker(pid, pidData?.nonce) : false;
 
   // Detect crashed worker
-  if (!pidAlive && (progress.status === "running" || progress.status === "initializing" || progress.status === "queued")) {
+  if (!pidAlive && ["running", "reconnecting", "initializing", "queued"].includes(progress.status)) {
     progress.status = "crashed";
     progress.error = "Worker process exited unexpectedly";
     // Check worker log for details
@@ -1221,7 +1383,7 @@ function cmdStatus(parsed) {
   }
 
   // Recalculate elapsed for running processes
-  if (progress.status === "running" && progress.startedAt) {
+  if (["running", "reconnecting"].includes(progress.status) && progress.startedAt) {
     progress.elapsedMs = Date.now() - new Date(progress.startedAt).getTime();
   }
 
@@ -1236,6 +1398,7 @@ function cmdStatus(parsed) {
   switch (progress.status) {
     case "completed":      process.exit(0); break;
     case "running":
+    case "reconnecting":
     case "initializing":
     case "queued":         process.exit(7); break;
     case "cancelled":      process.exit(8); break;
@@ -1302,7 +1465,7 @@ async function cmdCancel(parsed) {
 
   // Update progress if still marked as running
   const progress = loadProgress(reviewDir, sessionId);
-  if (progress && ["running", "initializing", "queued"].includes(progress.status)) {
+  if (progress && ["running", "reconnecting", "initializing", "queued"].includes(progress.status)) {
     saveProgress(reviewDir, sessionId, {
       ...progress,
       status: "cancelled",

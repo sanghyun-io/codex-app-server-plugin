@@ -15,6 +15,8 @@ import {
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createConnection } from "node:net";
+import { createInterface } from "node:readline";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(__dirname, "../bin/codex-review.mjs");
@@ -35,6 +37,7 @@ function cli(args, opts = {}) {
     CODEX_REVIEW_MODEL: opts.envModel ?? "",
     FAKE_TURN_DELAY_MS: String(opts.turnDelay ?? 100),
     FAKE_TURN_TEXT: opts.turnText ?? "Test output.\n\n[VERDICT] - APPROVE",
+    FAKE_DELTA_INTERVAL_MS: String(opts.deltaInterval ?? 20),
     FAKE_REQUEST_LOG: opts.requestLog ?? "",
     FAKE_MODELS: opts.models !== undefined ? JSON.stringify(opts.models) : "",
     FAKE_MODEL_PAGES: opts.modelPages ? JSON.stringify(opts.modelPages) : "",
@@ -42,6 +45,7 @@ function cli(args, opts = {}) {
     FAKE_TURN_START_REJECT: opts.turnStartReject ?? "",
     FAKE_INTERRUPT_LOG: opts.interruptLog ?? "",
     FAKE_FOREIGN_DELTA: opts.foreignDelta ? "1" : "",
+    CODEX_REVIEW_TEST_MODE: opts.testMode ? "1" : "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -71,6 +75,30 @@ function requestsByMethod(path, method) {
   return readRequests(path).filter(request => request.method === method);
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function brokerControl(home, action, params = {}) {
+  const portFile = resolve(home, ".claude", "tmp", "broker.port");
+  const { port } = readJson(portFile);
+  return await new Promise((resolveP, rejectP) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    const rl = createInterface({ input: socket });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      rejectP(new Error(`Broker control timed out: ${action}`));
+    }, 5000);
+    socket.on("connect", () => {
+      socket.write(JSON.stringify({ action, id: 1, ...params }) + "\n");
+    });
+    socket.on("error", rejectP);
+    rl.on("line", (line) => {
+      const message = JSON.parse(line);
+      if (message.id !== 1) return;
+      clearTimeout(timer);
+      socket.end();
+      message.error ? rejectP(message.error) : resolveP(message.result);
+    });
+  });
+}
 
 // ---- Setup ----
 
@@ -423,13 +451,13 @@ describe("broker turn multiplexing", () => {
     }
   });
 
-  async function pollToComplete(sid, timeoutMs = 30_000) {
+  async function pollToComplete(sid, timeoutMs = 30_000, home = BROKER_HOME) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await sleep(300);
       const r = cli(
         ["status", "--session", sid, "--review-dir", TEST_DIR],
-        { broker: true, home: BROKER_HOME }
+        { broker: true, home }
       );
       if (r.exit === 0) return JSON.parse(r.stdout);
       if (![7].includes(r.exit)) throw new Error(`status exit ${r.exit}: ${r.stderr}`);
@@ -544,6 +572,124 @@ describe("broker turn multiplexing", () => {
 
     assert.equal(result.exit, 0, result.stderr);
     assert.doesNotMatch(readFileSync(outputPath, "utf8"), /FOREIGN_NOTIFICATION/);
+  });
+
+  it("reattaches after a broker disconnect without duplicating output", async () => {
+    const reconnectHome = resolve(TEST_DIR, `reconnect_home_${Date.now()}`);
+    mkdirSync(resolve(reconnectHome, ".claude", "tmp"), { recursive: true });
+    const sid = newSid();
+    const promptPath = resolve(TEST_DIR, `${sid}_reattach_p.txt`);
+    const outputPath = resolve(TEST_DIR, `${sid}_reattach_o.txt`);
+    const markers = Array.from({ length: 8 }, (_, index) =>
+      `CHUNK_${index}_${String(index).repeat(40)}`
+    );
+    writeFileSync(promptPath, "Keep streaming after a local disconnect.", "utf8");
+
+    const started = cli([
+      "start", promptPath, outputPath,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home: reconnectHome,
+      turnDelay: 250,
+      deltaInterval: 250,
+      turnText: `${markers.join("")}\n\n[VERDICT] - APPROVE`,
+      testMode: true,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let progress;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      await sleep(100);
+      const status = cli(
+        ["status", "--session", sid, "--review-dir", TEST_DIR],
+        { broker: true, home: reconnectHome }
+      );
+      progress = JSON.parse(status.stdout);
+      if (progress.turnId) break;
+    }
+    assert.ok(progress?.turnId, "turn id was not published to progress");
+
+    await brokerControl(reconnectHome, "test/disconnect-turn", {
+      threadId: progress.threadId,
+      turnId: progress.turnId,
+    });
+
+    const completed = await pollToComplete(sid, 30_000, reconnectHome);
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.reconnectCount, 1);
+    const output = readFileSync(outputPath, "utf8");
+    for (const marker of markers) {
+      assert.equal(output.split(marker).length - 1, 1, `${marker} was duplicated or missing`);
+    }
+    const reconnectPort = readJson(resolve(reconnectHome, ".claude", "tmp", "broker.port"));
+    if (reconnectPort?.pid) {
+      try { process.kill(reconnectPort.pid, "SIGTERM"); } catch { /* already stopped */ }
+    }
+  });
+
+  it("fails promptly with partial output and no replay after app server exit", async () => {
+    const crashHome = resolve(TEST_DIR, `crash_home_${Date.now()}`);
+    mkdirSync(resolve(crashHome, ".claude", "tmp"), { recursive: true });
+    const sid = newSid();
+    const promptPath = resolve(TEST_DIR, `${sid}_crash_p.txt`);
+    const outputPath = resolve(TEST_DIR, `${sid}_crash_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_crash_requests.jsonl`);
+    const longText = Array.from({ length: 30 }, (_, index) =>
+      `PART_${index}_${String(index % 10).repeat(40)}`
+    ).join("");
+    writeFileSync(promptPath, "Preserve partial output after server exit.", "utf8");
+
+    const started = cli([
+      "start", promptPath, outputPath,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home: crashHome,
+      turnDelay: 100,
+      deltaInterval: 300,
+      turnText: `${longText}\n\n[VERDICT] - APPROVE`,
+      requestLog,
+      testMode: true,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let progress;
+    const streamDeadline = Date.now() + 10_000;
+    while (Date.now() < streamDeadline) {
+      await sleep(150);
+      const status = cli(
+        ["status", "--session", sid, "--review-dir", TEST_DIR],
+        { broker: true, home: crashHome }
+      );
+      progress = JSON.parse(status.stdout);
+      if (progress.turnId && progress.charsReceived > 0) break;
+    }
+    assert.ok(progress?.turnId, "turn id was not published");
+    assert.ok(progress?.charsReceived > 0, "no partial output was observed");
+
+    await brokerControl(crashHome, "test/kill-app-server");
+
+    let failed;
+    const failDeadline = Date.now() + 10_000;
+    while (Date.now() < failDeadline) {
+      await sleep(150);
+      const status = cli(
+        ["status", "--session", sid, "--review-dir", TEST_DIR],
+        { broker: true, home: crashHome }
+      );
+      if (status.exit === 6) {
+        failed = JSON.parse(status.stdout);
+        break;
+      }
+    }
+    assert.equal(failed?.status, "failed");
+    assert.ok(existsSync(outputPath), "partial output file was not written");
+    assert.ok(readFileSync(outputPath, "utf8").length > 0, "partial output was empty");
+    assert.equal(requestsByMethod(requestLog, "turn/start").length, 1);
   });
 });
 

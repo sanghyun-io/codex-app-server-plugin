@@ -110,7 +110,7 @@ function log(msg) {
 // ---------------------------------------------------------------------------
 
 class AppServerConnection {
-  constructor() {
+  constructor(onFatalExit = null) {
     this.proc = null;
     this.rl = null;
     this.msgId = 0;
@@ -119,6 +119,10 @@ class AppServerConnection {
     this.initialized = false;
     this.serverInfo = null;
     this.account = null;
+    this.turns = new Map();
+    this.watchers = new Map();
+    this.onFatalExit = onFatalExit;
+    this.closing = false;
 
   }
 
@@ -141,10 +145,7 @@ class AppServerConnection {
         }
       });
 
-      this.proc.on("exit", (code) => {
-        log(`App server exited with code ${code}`);
-        this.proc = null;
-      });
+      this.proc.on("exit", (code, signal) => this._handleProcessExit(code, signal));
 
       this.rl = createInterface({ input: this.proc.stdout });
       this.rl.on("line", (line) => {
@@ -167,6 +168,8 @@ class AppServerConnection {
     }
 
     if (!msg.method) return;
+
+    this._updateTurnSnapshot(msg.method, msg.params);
 
     // Forward via subscribe fan-out. Workers scope turn events by protocol id.
     for (const sub of this.subscribers) {
@@ -240,9 +243,126 @@ class AppServerConnection {
     this.subscribers.delete(sub);
   }
 
+  registerTurn(socket, threadId, turnId) {
+    if (!threadId || !turnId) throw new Error("Cannot register turn without threadId and turnId");
+    let snapshot = this.turns.get(turnId);
+    if (!snapshot) {
+      const now = new Date().toISOString();
+      snapshot = {
+        threadId,
+        turnId,
+        text: "",
+        status: "inProgress",
+        error: null,
+        startedAt: now,
+        updatedAt: now,
+        completedAt: null,
+      };
+      this.turns.set(turnId, snapshot);
+    }
+    let sockets = this.watchers.get(turnId);
+    if (!sockets) {
+      sockets = new Set();
+      this.watchers.set(turnId, sockets);
+    }
+    sockets.add(socket);
+    return { ...snapshot };
+  }
+
+  getTurnSnapshot(threadId, turnId) {
+    const snapshot = this.turns.get(turnId);
+    if (!snapshot || snapshot.threadId !== threadId) {
+      throw new Error(`Turn snapshot not found: ${threadId}/${turnId}`);
+    }
+    return { ...snapshot };
+  }
+
+  attachTurn(socket, threadId, turnId) {
+    const snapshot = this.getTurnSnapshot(threadId, turnId);
+    let sockets = this.watchers.get(turnId);
+    if (!sockets) {
+      sockets = new Set();
+      this.watchers.set(turnId, sockets);
+    }
+    sockets.add(socket);
+    return snapshot;
+  }
+
+  disconnectTurnWatchers(threadId, turnId) {
+    this.getTurnSnapshot(threadId, turnId);
+    const sockets = [...(this.watchers.get(turnId) || [])];
+    setTimeout(() => {
+      for (const socket of sockets) {
+        try { socket.destroy(); } catch { /* already closed */ }
+      }
+    }, 25);
+    return { disconnected: sockets.length };
+  }
+
+  detachSocket(socket) {
+    for (const sockets of this.watchers.values()) sockets.delete(socket);
+  }
+
+  killForTest() {
+    if (!this.proc) throw new Error("App server is not running");
+    setTimeout(() => {
+      try { this.proc?.kill(); } catch { /* already stopped */ }
+    }, 25);
+    return { stopping: true };
+  }
+
+  _handleProcessExit(code, signal) {
+    log(`App server exited with code ${code}${signal ? ` (${signal})` : ""}`);
+    this.proc = null;
+    if (this.closing) return;
+    const message = `App server exited unexpectedly (code ${code ?? "unknown"}${signal ? `, signal ${signal}` : ""})`;
+    for (const [, pending] of this.pendingRequests) pending.reject(new Error(message));
+    this.pendingRequests.clear();
+    for (const snapshot of this.turns.values()) {
+      if (snapshot.status !== "inProgress") continue;
+      snapshot.status = "failed";
+      snapshot.error = { message };
+      snapshot.updatedAt = new Date().toISOString();
+      snapshot.completedAt = snapshot.updatedAt;
+      for (const socket of this.watchers.get(snapshot.turnId) || []) {
+        try {
+          socket.write(JSON.stringify({
+            type: "notification",
+            method: "broker/turn-failed",
+            params: {
+              threadId: snapshot.threadId,
+              turnId: snapshot.turnId,
+              error: { message },
+            },
+          }) + "\n");
+        } catch { /* disconnected watcher */ }
+      }
+    }
+    setTimeout(() => this.onFatalExit?.(message), 100);
+  }
+
+  _updateTurnSnapshot(method, params) {
+    const turnId = params?.turnId || params?.turn?.id;
+    const threadId = params?.threadId;
+    if (!turnId || !threadId) return;
+    const snapshot = this.turns.get(turnId);
+    if (!snapshot || snapshot.threadId !== threadId) return;
+    snapshot.updatedAt = new Date().toISOString();
+    if (method === "item/agentMessage/delta") {
+      snapshot.text += params?.delta || "";
+    } else if (method === "turn/completed") {
+      snapshot.status = params?.turn?.status || "unknown";
+      snapshot.error = params?.turn?.error || null;
+      snapshot.completedAt = snapshot.updatedAt;
+    }
+  }
+
   close() {
+    this.closing = true;
     this.pendingRequests.clear();
     this.subscribers.clear();
+    this.turns.clear();
+    this.watchers.clear();
     if (this.rl) { this.rl.close(); this.rl = null; }
     if (this.proc) {
       try { this.proc.kill(); } catch { /* ignore */ }
@@ -257,7 +377,7 @@ class AppServerConnection {
 
 class BrokerServer {
   constructor() {
-    this.appServer = new AppServerConnection();
+    this.appServer = new AppServerConnection(() => this.shutdown());
     this.server = null;
     this.clients = new Set();
     this.idleTimer = null;
@@ -318,6 +438,39 @@ class BrokerServer {
           case "request": {
             const timeoutMs = msg.timeout || INIT_TIMEOUT_MS;
             const result = await this.appServer.request(msg.method, msg.params, timeoutMs);
+            if (msg.method === "turn/start" && result?.turn?.id) {
+              this.appServer.registerTurn(socket, msg.params?.threadId, result.turn.id);
+            }
+            socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
+            break;
+          }
+
+          case "turn/attach": {
+            const result = this.appServer.attachTurn(socket, msg.threadId, msg.turnId);
+            socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
+            break;
+          }
+
+          case "turn/snapshot": {
+            const result = this.appServer.getTurnSnapshot(msg.threadId, msg.turnId);
+            socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
+            break;
+          }
+
+          case "test/disconnect-turn": {
+            if (process.env.CODEX_REVIEW_TEST_MODE !== "1") {
+              throw new Error("Test broker controls are disabled");
+            }
+            const result = this.appServer.disconnectTurnWatchers(msg.threadId, msg.turnId);
+            socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
+            break;
+          }
+
+          case "test/kill-app-server": {
+            if (process.env.CODEX_REVIEW_TEST_MODE !== "1") {
+              throw new Error("Test broker controls are disabled");
+            }
+            const result = this.appServer.killForTest();
             socket.write(JSON.stringify({ type: "response", id: msg.id, result }) + "\n");
             break;
           }
@@ -368,6 +521,7 @@ class BrokerServer {
         this.appServer.removeSubscriber(subscription);
         subscription = null;
       }
+      this.appServer.detachSocket(socket);
       rl.close();
     };
 
