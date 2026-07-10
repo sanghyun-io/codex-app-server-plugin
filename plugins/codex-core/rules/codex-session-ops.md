@@ -32,7 +32,7 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 | Order | Action |
 |:-----:|--------|
-| 1 | sessions 절차로 실행 중(`running`) 세션 수집 |
+| 1 | sessions 절차로 실행 중(`queued`부터 `reconnecting`까지의 비종료 상태) 세션 수집 |
 | 2 | 복수 세션이면 **AskUserQuestion**으로 중단 대상 선택 |
 | 3 | `codex-review cancel --session {SID} --review-dir {REVIEW_DIR}` 실행 |
 | 4 | 부분 출력 파일이 있으면 경로 안내 |
@@ -59,16 +59,23 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 ```json
 {
-  "status": "running",
+  "status": "streaming",
   "startedAt": "2026-04-10T10:23:45.123Z",
   "elapsedMs": 45000,
+  "projectRoot": "/repo",
+  "promptChars": 42000,
+  "threadId": "thr_abc123",
+  "turnId": "turn_abc123",
   "charsReceived": 3200,
+  "firstOutputMs": 9700,
+  "lastEventAt": "2026-04-10T10:24:30.123Z",
+  "reconnectCount": 0,
   "pid": 12345,
   "pidAlive": true
 }
 ```
 
-**status 값**: `initializing` / `queued` / `running` / `completed` / `timeout_partial` / `cancelled` / `crashed` / `failed`
+**status 값**: `queued` / `connecting` / `validating_model` / `starting_thread` / `waiting_first_output` / `streaming` / `reconnecting` / `completed` / `timeout_partial` / `cancelled` / `crashed` / `failed`
 
 ### state.json (Thread 메타데이터)
 
@@ -76,6 +83,7 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 {
   "threadId": "thr_abc123...",
   "model": "gpt-5.6-terra",
+  "projectRoot": "/repo",
   "turnCount": 3,
   "lastTurnAt": "2026-04-10T10:25:12.456Z"
 }

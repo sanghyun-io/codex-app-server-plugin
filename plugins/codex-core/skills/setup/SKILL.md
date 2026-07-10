@@ -56,6 +56,22 @@ for name in codex-review.mjs broker.mjs; do
   fi
 done
 
+# core runtime modules
+if [ -d "$CORE_ROOT/bin/lib" ]; then
+  for src in "$CORE_ROOT/bin/lib"/*.mjs; do
+    [ -f "$src" ] || continue
+    name=$(basename "$src")
+    dest="$INSTALLED_BIN_DIR/lib/$name"
+    if [ ! -f "$dest" ]; then
+      echo "MISSING: lib/$name"
+    elif diff -q "$src" "$dest" > /dev/null 2>&1; then
+      echo "MATCH: lib/$name"
+    else
+      echo "DIFFER: lib/$name"
+    fi
+  done
+fi
+
 # lifecycle scripts
 for name in session-lifecycle.mjs stop-gate.mjs; do
   src="$CORE_ROOT/scripts/$name"
@@ -144,11 +160,12 @@ DIFFER 파일이 하나라도 있으면 **AskUserQuestion**:
 "업데이트" 또는 MISSING 파일 복사 시 — Bash로 설치:
 
 ```bash
-mkdir -p ~/.claude/bin ~/.claude/schemas ~/.claude/rules
+mkdir -p ~/.claude/bin/lib ~/.claude/schemas ~/.claude/rules
 
 # core bin files
 cp "$CORE_ROOT/bin/codex-review.mjs" ~/.claude/bin/ && chmod +x ~/.claude/bin/codex-review.mjs
 [ -f "$CORE_ROOT/bin/broker.mjs" ] && cp "$CORE_ROOT/bin/broker.mjs" ~/.claude/bin/ && chmod +x ~/.claude/bin/broker.mjs
+[ -d "$CORE_ROOT/bin/lib" ] && cp "$CORE_ROOT/bin/lib/"*.mjs ~/.claude/bin/lib/
 
 # lifecycle scripts
 for name in session-lifecycle.mjs stop-gate.mjs; do
@@ -423,6 +440,7 @@ Show the final summary:
 설치된 항목:
   ✓ ~/.claude/bin/codex-review.mjs
   ✓ ~/.claude/bin/broker.mjs
+  ✓ ~/.claude/bin/lib/project-scope.mjs
   ✓ ~/.claude/bin/session-lifecycle.mjs
   ✓ ~/.claude/bin/stop-gate.mjs
   ✓ ~/.claude/schemas/review-output.schema.json

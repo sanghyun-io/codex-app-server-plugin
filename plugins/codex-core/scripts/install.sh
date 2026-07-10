@@ -13,9 +13,9 @@ echo ""
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}"
 
-# 1. bin/codex-review.mjs + broker.mjs → ~/.claude/bin/
+# 1. Runtime files → ~/.claude/bin/
 BIN_DIR="$HOME/.claude/bin"
-mkdir -p "$BIN_DIR"
+mkdir -p "$BIN_DIR/lib"
 
 if [ -f "$BIN_DIR/codex-review.mjs" ]; then
   echo -e "${YELLOW}⚠️  codex-review.mjs already exists, overwriting...${NC}"
@@ -28,6 +28,12 @@ if [ -f "$PLUGIN_ROOT/bin/broker.mjs" ]; then
   cp "$PLUGIN_ROOT/bin/broker.mjs" "$BIN_DIR/"
   chmod +x "$BIN_DIR/broker.mjs"
   echo -e "✓ Installed ${GREEN}~/.claude/bin/broker.mjs${NC}"
+fi
+
+if [ -f "$PLUGIN_ROOT/bin/lib/project-scope.mjs" ]; then
+  cp "$PLUGIN_ROOT/bin/lib/project-scope.mjs" "$BIN_DIR/lib/"
+  test -f "$BIN_DIR/lib/project-scope.mjs"
+  echo -e "✓ Installed ${GREEN}~/.claude/bin/lib/project-scope.mjs${NC}"
 fi
 
 # 2. schemas → ~/.claude/schemas/

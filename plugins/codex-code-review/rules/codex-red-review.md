@@ -212,6 +212,8 @@ code-review의 최종 리포트 형식을 기반으로 하되, verdict 줄을 �
 
 review-protocol.md v2의 비동기 실행 규칙을 그대로 적용한다. 파일 네이밍만 `rr_{SID}_*` prefix로 교체.
 
+세션의 canonical 프로젝트 루트 고정, heartbeat 재접속, 실제 upstream interrupt, progress 단계/지연 메트릭도 review-protocol.md 규칙을 그대로 따른다.
+
 ### 파일 네이밍 (Red Review 전용)
 
 | 파일 | 경로 |

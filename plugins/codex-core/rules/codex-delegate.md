@@ -157,6 +157,8 @@ Turn 1과 동일. Codex 응답을 해석하여 다음 행동을 결정한다.
 | 동일 제안 2회 이상 반복 (Codex가 막힘) | AskUserQuestion으로 사용자 개입 요청 |
 | Turn 수 ≥ 10 | AskUserQuestion으로 계속/종료 확인 (경고: 드물게 발생) |
 
+세션은 최초 `start`의 canonical 프로젝트 루트에 고정한다. 다른 프로젝트에서 같은 SID로 follow-up하지 않으며, `reconnecting` 상태에서는 새 turn을 시작하지 않고 기존 `threadId`/`turnId` 복구를 기다린다.
+
 ---
 
 ## Delegate Prompt Template (Turn 1)

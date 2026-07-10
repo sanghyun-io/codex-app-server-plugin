@@ -20,7 +20,7 @@
 ```
 Claude Code
   └─ codex-review.mjs              (JSON-RPC wrapper — codex-core가 설치)
-       └─ broker.mjs (TCP, opt-out) (영속 IPC 직렬화 — auth 캐시, warm app-server)
+       └─ broker.mjs (TCP, opt-out) (영속 IPC 멀티플렉서 — auth 캐시, warm app-server)
             └─ codex app-server      (단일 subprocess, 모든 워커가 공유)
                  └─ gpt-5.6-*          (stateful thread, 모델 변경 가능)
 ```
@@ -30,7 +30,9 @@ Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
 - `follow-up` — thread resume + 다음 turn (증분 diff만 전송)
 - `close` — 세션 상태 정리
 
-기본적으로 워커는 **영속 broker**(`broker.mjs`)를 통해 연결됩니다. broker는 localhost TCP 포트에서 단일 warm `codex app-server` subprocess를 유지해, turn마다 발생하는 spawn 오버헤드(~2–3초)를 제거하고 모든 워커가 단일 auth 체크를 재사용하게 합니다. broker는 첫 사용 시 자동 시작되고, 10분 idle 후 종료되며, `SessionEnd` hook으로도 정리됩니다. `CODEX_REVIEW_NO_BROKER=1`을 설정하면 broker를 거치지 않고 `codex app-server`를 직접 spawn합니다 (테스트 용도).
+기본적으로 워커는 **영속 broker**(`broker.mjs`)를 통해 연결됩니다. broker는 localhost TCP 포트에서 단일 warm `codex app-server` subprocess를 유지해 turn마다 발생하는 spawn 오버헤드(~2–3초)를 제거하고, auth 체크를 재사용하며, 동시 turn을 `threadId`/`turnId`로 안전하게 분리합니다. 실행 중에는 5초 heartbeat를 보내고 2회 연속 응답이 없으면 재접속하여 broker 출력 스냅샷에 재부착하므로 프롬프트를 재전송하지 않습니다. broker는 첫 사용 시 자동 시작되고 10분 idle 후 종료되며 `SessionEnd` hook으로도 정리됩니다. `CODEX_REVIEW_NO_BROKER=1`로 우회할 수 있습니다.
+
+각 세션은 canonical Git 프로젝트 루트에 고정되며 동일한 `cwd`가 `thread/start`와 `turn/start`에 전달됩니다. 다른 프로젝트에서 follow-up하면 Codex 호출 전에 실패합니다. progress JSON에는 연결/모델 검증/thread 시작/최초 출력 대기/스트리밍 단계와 프롬프트 크기, 최초 출력 지연, 수신 글자 수, protocol ID, 재접속 횟수가 기록됩니다. 131,072자를 초과하는 프롬프트는 자르지 않고 그대로 전달하며 지연 경고만 남깁니다.
 
 호출별 모델은 변경 가능합니다 (우선순위: CLI 플래그 > 환경변수 > 워크플로 기본값 > wrapper 기본값 `gpt-5.6-terra`):
 
@@ -48,6 +50,7 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 |------|------|--------|
 | `CODEX_REVIEW_MODEL` | 워크플로/wrapper 모델 오버라이드 | unset (wrapper 기본값: `gpt-5.6-terra`) |
 | `CODEX_REVIEW_NO_BROKER` | broker 생략, `codex app-server` 직접 spawn (`1`로 설정) | unset |
+| `CODEX_REVIEW_HEARTBEAT_MS` | broker heartbeat 간격 (고급/테스트용) | `5000` |
 | `CODEX_BINARY` | `codex app-server` 대신 사용할 커스텀 바이너리 경로 (테스트용) | unset |
 
 ## 사전 요구사항
@@ -89,7 +92,8 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 | 파일 | 위치 | 용도 |
 |------|------|------|
 | `codex-review.mjs` | `~/.claude/bin/` | JSON-RPC wrapper CLI |
-| `broker.mjs` | `~/.claude/bin/` | IPC 직렬화용 영속 TCP broker |
+| `broker.mjs` | `~/.claude/bin/` | 동시 turn 멀티플렉싱·복구용 영속 TCP broker |
+| `lib/project-scope.mjs` | `~/.claude/bin/lib/` | canonical 프로젝트 루트 고정 및 비교 |
 | `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd 핸들러 (워커 + broker cleanup) |
 | `stop-gate.mjs` | `~/.claude/bin/` | Stop hook 품질 게이트 (진행 중 리뷰 / 미커밋 변경 차단) |
 | `review-output.schema.json` | `~/.claude/schemas/` | 구조화된 리뷰 출력 JSON 스키마 |

@@ -131,6 +131,8 @@ echo "EXIT_CODE: $?"
 > - `--stdin`으로 프롬프트를 stdin에서 읽어 `<prompt-file>`에 자동 저장 → **Write 도구 인가 불필요**
 > - `start` 명령은 **즉시 반환** (exit 0). 실제 Codex 호출은 백그라운드 워커가 처리
 > - 워커는 진행 상황을 `cr_{SID}_progress.json`에 3초 간격으로 기록
+> - 세션은 시작한 canonical Git 프로젝트 루트에 고정되며, 다른 프로젝트의 follow-up은 실행 전에 거부
+> - 장기 turn은 broker heartbeat와 `threadId`/`turnId` 스냅샷 재부착으로 복구하며 프롬프트를 재전송하지 않음
 > - 결과 확인은 **Step 2 (폴링)**으로 진행
 > - `--session`과 `--review-dir`는 필수 인자
 > - heredoc 종료 후 `echo "EXIT_CODE: $?"`로 exit code 확인
@@ -151,7 +153,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 | Exit Code | 상태 | 처리 |
 |:---------:|------|------|
 | 0 | `completed` | **Step 3으로 진행** — 출력 파일 읽기 |
-| 7 | `running` / `initializing` / `queued` | **30초 후 재폴링** (아래 진행 안내 규칙 참조) |
+| 7 | `queued` / `connecting` / `validating_model` / `starting_thread` / `waiting_first_output` / `streaming` / `reconnecting` | **30초 후 재폴링** (아래 진행 안내 규칙 참조) |
 | 5 | `timeout_partial` | 부분 출력 저장됨 — Step 3으로 진행 (출력 파일 읽기) |
 | 8 | `cancelled` | 취소됨 — 부분 출력이 있으면 읽기 |
 | 6 | `crashed` / `failed` | 에러 처리 섹션 참조 |
@@ -160,14 +162,24 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 **status JSON 형식**:
 ```json
 {
-  "status": "running",
+  "status": "streaming",
   "startedAt": "2026-03-23T...",
   "elapsedMs": 45000,
+  "projectRoot": "/repo",
+  "promptChars": 182400,
+  "threadId": "thr_...",
+  "turnId": "turn_...",
   "charsReceived": 3200,
+  "firstOutputAt": "2026-03-23T...",
+  "firstOutputMs": 12800,
+  "lastEventAt": "2026-03-23T...",
+  "reconnectCount": 0,
   "pid": 12345,
   "pidAlive": true
 }
 ```
+
+`promptChars > 131072`이면 `warnings`에 최초 출력 지연 가능성이 기록되지만 프롬프트는 축약·분할·재전송하지 않는다.
 
 **진행 안내 규칙**: Codex 요청은 수 분이 걸릴 수 있으므로, **중간에 사용자에게 계속할지 묻지 않고 계속 대기**한다.
 대신 진행 상황만 주기적으로 텍스트로 안내한다.
@@ -537,7 +549,7 @@ After all issues, provide:
 | Exit Code | 의미 | 처리 |
 |:---------:|------|------|
 | 0 | 완료 (`completed`) | 출력 파일 읽기 → PHASE 3 진행 |
-| 7 | 실행 중 (`running` / `initializing` / `queued`) | 30초 후 재폴링 (묻지 않고 계속 대기, 2분마다 진행 안내) |
+| 7 | 실행 중 (`queued` / `connecting` / `validating_model` / `starting_thread` / `waiting_first_output` / `streaming` / `reconnecting`) | 30초 후 재폴링 (묻지 않고 계속 대기, 2분마다 진행 안내) |
 | 5 | 타임아웃 (`timeout_partial`, 30분 safety net) | 부분 출력 읽기 → PHASE 3 진행 |
 | 8 | 취소됨 (`cancelled`) | 부분 출력이 있으면 읽기 |
 | 1 | codex 바이너리 없음 | 즉시 PASS |

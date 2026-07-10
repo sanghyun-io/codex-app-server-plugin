@@ -20,7 +20,7 @@ After installing **codex-core** alone, sentences like "Codex에게 이 버그 �
 ```
 Claude Code
   └─ codex-review.mjs              (JSON-RPC wrapper — installed by codex-core)
-       └─ broker.mjs (TCP, opt-out) (persistent IPC serializer — auth cached, warm app-server)
+       └─ broker.mjs (TCP, opt-out) (persistent IPC multiplexer — auth cached, warm app-server)
             └─ codex app-server      (single subprocess, shared across workers)
                  └─ gpt-5.6-*          (stateful thread, model is configurable)
 ```
@@ -30,7 +30,9 @@ The wrapper manages thread lifecycle via three commands:
 - `follow-up` — resume thread + next turn (incremental diff only)
 - `close` — clean up session state
 
-By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s) and reuses a single auth check across all workers. The broker auto-starts on first use, idles out after 10 minutes, and is torn down by the `SessionEnd` hook. Set `CODEX_REVIEW_NO_BROKER=1` to bypass the broker and spawn `codex app-server` directly (used in tests).
+By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s), reuses a single auth check, and safely multiplexes concurrent turns by `threadId`/`turnId`. During an active turn the wrapper sends a 5-second heartbeat; after two missed replies it reconnects and reattaches to the broker's output snapshot without replaying the prompt. The broker auto-starts on first use, idles out after 10 minutes, and is torn down by the `SessionEnd` hook. Set `CODEX_REVIEW_NO_BROKER=1` to bypass it.
+
+Each session is bound to the canonical Git project root and sends that same `cwd` to both `thread/start` and `turn/start`. Follow-ups from another project fail before reaching Codex. Progress JSON exposes connection/validation/thread/first-output/streaming phases plus prompt size, first-output latency, received characters, protocol IDs, and reconnect count. Prompts over 131,072 characters are preserved intact and receive a latency warning only.
 
 The model used for each call is configurable (priority: CLI flag > env var > workflow default > wrapper default `gpt-5.6-terra`):
 
@@ -48,6 +50,7 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 |----------|---------|---------|
 | `CODEX_REVIEW_MODEL` | Override workflow/wrapper model | unset (wrapper default: `gpt-5.6-terra`) |
 | `CODEX_REVIEW_NO_BROKER` | Skip broker, spawn `codex app-server` directly (set to `1`) | unset |
+| `CODEX_REVIEW_HEARTBEAT_MS` | Broker heartbeat interval (advanced/testing) | `5000` |
 | `CODEX_BINARY` | Path to a custom binary used in place of `codex app-server` (testing hook) | unset |
 
 ## Prerequisites
@@ -89,7 +92,8 @@ The runtime + universal workflows. Installs CLI binary, broker, hook scripts, sc
 | File | Location | Purpose |
 |------|----------|---------|
 | `codex-review.mjs` | `~/.claude/bin/` | JSON-RPC wrapper CLI |
-| `broker.mjs` | `~/.claude/bin/` | Persistent TCP broker for IPC serialization |
+| `broker.mjs` | `~/.claude/bin/` | Persistent TCP broker for concurrent turn multiplexing and recovery |
+| `lib/project-scope.mjs` | `~/.claude/bin/lib/` | Canonical project-root binding and comparison |
 | `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd handler (worker + broker cleanup) |
 | `stop-gate.mjs` | `~/.claude/bin/` | Stop hook quality gate (active reviews / uncommitted changes) |
 | `review-output.schema.json` | `~/.claude/schemas/` | JSON schema for structured review output |

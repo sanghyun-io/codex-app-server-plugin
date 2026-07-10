@@ -285,6 +285,7 @@ review-protocol.md v2의 비동기 실행 규칙을 적용한다:
 - **비동기 실행**: `start`/`follow-up` → `status` 폴링 → 결과 수집
 - Exit code 기반 에러 처리 (review-protocol.md 참조)
 - 묻지 않고 계속 대기, 2분마다 진행 안내 (중단은 사용자가 직접 `/codex-core:halt`)
+- canonical 프로젝트 루트 고정, heartbeat 재접속, upstream interrupt, progress 단계/지연 메트릭은 review-protocol.md를 그대로 적용
 
 ### 파일 네이밍 (코드 리뷰 전용)
 

@@ -1,7 +1,7 @@
 {
   "name": "codex-core",
   "description": "Codex integration for Claude Code — natural language router, A+ delegation, session ops, and the codex-review CLI runtime",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "author": {
     "name": "sanghyun-io",
     "email": "ppkimsanh@gmail.com"
