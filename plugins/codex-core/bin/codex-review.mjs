@@ -49,6 +49,19 @@ const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
 const CANCEL_CHECK_MS = 500;               // 500ms cancel signal polling
+const LARGE_PROMPT_CHARS = 131_072;
+const ACTIVE_PROGRESS_STATUSES = new Set([
+  "queued",
+  "connecting",
+  "validating_model",
+  "starting_thread",
+  "waiting_first_output",
+  "streaming",
+  "reconnecting",
+  // Legacy progress files from versions before 2.5.0.
+  "initializing",
+  "running",
+]);
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -575,7 +588,7 @@ class BrokerClient {
 
   async checkAuth() {
     // Broker already checked auth on startup — ping to verify connection
-    this.send({ action: "ping" });
+    await this.localRequest("ping");
     return { email: "broker-cached", type: "broker" };
   }
 
@@ -610,6 +623,7 @@ class BrokerClient {
     const timeoutMs = opts.timeout ?? DEFAULT_HARD_TIMEOUT_MS;
     const onDelta = opts.onDelta || (() => {});
     const cancelSignal = opts.cancelSignal || (() => false);
+    const heartbeatMs = Math.max(50, Number(process.env.CODEX_REVIEW_HEARTBEAT_MS) || 5_000);
 
     // Subscribe to turn notifications
     this.subscribe(["item/agentMessage/delta", "turn/completed", "broker/turn-failed", "error"]);
@@ -624,12 +638,16 @@ class BrokerClient {
       let interruptReason = null;
       let interruptError = null;
       let interruptGraceTimer = null;
+      let heartbeatTimer = null;
+      let heartbeatInFlight = false;
+      let missedHeartbeats = 0;
       const reconnectDelays = [250, 1000, 2000];
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (cancelChecker) clearInterval(cancelChecker);
         if (interruptGraceTimer) clearTimeout(interruptGraceTimer);
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         removeDisconnectHandler();
         for (const [, pending] of this.pendingRequests) {
           pending.resolve(null);
@@ -666,7 +684,8 @@ class BrokerClient {
             const snapshot = await this.attachTurn(threadId, turnId);
             agentText = snapshot?.text || "";
             reconnectCount += 1;
-            opts.onReconnect?.(reconnectCount, agentText.length);
+            missedHeartbeats = 0;
+            opts.onReconnect?.(reconnectCount, agentText.length, snapshot);
             reconnecting = false;
             if (snapshot?.status && snapshot.status !== "inProgress") {
               finish({
@@ -686,6 +705,23 @@ class BrokerClient {
         });
       };
       const removeDisconnectHandler = this.onDisconnect(handleDisconnect);
+
+      const heartbeat = async () => {
+        if (resolved || reconnecting || heartbeatInFlight) return;
+        heartbeatInFlight = true;
+        try {
+          await this.localRequest("ping", {}, heartbeatMs);
+          missedHeartbeats = 0;
+        } catch {
+          if (resolved || reconnecting) return;
+          missedHeartbeats += 1;
+          if (missedHeartbeats >= 2) {
+            this.socket?.destroy();
+          }
+        } finally {
+          heartbeatInFlight = false;
+        }
+      };
 
       const requestInterrupt = async (reason) => {
         if (resolved || interruptSent) return;
@@ -764,7 +800,10 @@ class BrokerClient {
       ).then((result) => {
         turnId = result?.turn?.id || null;
         if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
-        else opts.onStarted?.(turnId);
+        else {
+          opts.onStarted?.(turnId);
+          heartbeatTimer = setInterval(() => { void heartbeat(); }, heartbeatMs);
+        }
       }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
@@ -1108,21 +1147,35 @@ async function workerMain(parsed) {
   let charsReceived = 0;
   let activeTurnId = null;
   let reconnectCount = 0;
+  let currentPhase = "connecting";
+  let firstOutputAt = null;
+  const warnings = promptText.length > LARGE_PROMPT_CHARS
+    ? [`Large prompt (${promptText.length} chars) may increase time to first output.`]
+    : [];
 
   // Graceful cancel on SIGTERM
   process.on("SIGTERM", () => { cancelled = true; });
 
-  const progress = (status, extra = {}) => {
+  const progressContext = {
+    startedAt: new Date(startMs).toISOString(),
+    projectRoot,
+    promptChars: promptText.length,
+    charsReceived: 0,
+    reconnectCount: 0,
+    ...(warnings.length ? { warnings } : {}),
+  };
+
+  const progress = (status = currentPhase, extra = {}) => {
+    currentPhase = status;
+    Object.assign(progressContext, extra, { charsReceived, reconnectCount });
     saveProgress(reviewDir, sessionId, {
+      ...progressContext,
       status,
-      startedAt: new Date(startMs).toISOString(),
       elapsedMs: Date.now() - startMs,
-      charsReceived,
-      ...extra,
     });
   };
 
-  progress("initializing");
+  progress("connecting");
 
   // Try broker first, fall back to direct AppServerClient
   // Broker can be disabled via env (useful for testing with fake-codex)
@@ -1165,7 +1218,10 @@ async function workerMain(parsed) {
       effectiveModel = modelExplicit ? model : (state.model || model || DEFAULT_MODEL);
     }
 
+    progress("validating_model", { model: effectiveModel });
     const availableModels = await validateModelAvailability(client, effectiveModel);
+
+    progress("starting_thread", { model: effectiveModel });
 
     if (command === "start") {
       const threadResult = await client.startThread({ model: effectiveModel, cwd: projectRoot });
@@ -1185,11 +1241,11 @@ async function workerMain(parsed) {
       log(`Thread resumed: ${threadId} (model: ${effectiveModel})`);
     }
 
-    progress("running", { threadId });
+    progress("waiting_first_output", { threadId });
 
     // Periodic progress file updates
     const progressTimer = setInterval(() => {
-      progress("running", { threadId, turnId: activeTurnId, reconnectCount });
+      progress(currentPhase, { threadId, turnId: activeTurnId });
     }, PROGRESS_INTERVAL_MS);
 
     // Execute turn
@@ -1200,15 +1256,39 @@ async function workerMain(parsed) {
         model: effectiveModel,
         cwd: projectRoot,
         timeout: hardTimeout,
-        onDelta: (chars) => { charsReceived = chars; },
+        onDelta: (chars) => {
+          charsReceived = chars;
+          const now = new Date();
+          if (!firstOutputAt) {
+            firstOutputAt = now.toISOString();
+          }
+          progress("streaming", {
+            threadId,
+            turnId: activeTurnId,
+            firstOutputAt,
+            firstOutputMs: new Date(firstOutputAt).getTime() - startMs,
+            lastEventAt: now.toISOString(),
+          });
+        },
         onStarted: (turnId) => {
           activeTurnId = turnId;
-          progress("running", { threadId, turnId, reconnectCount });
+          progress("waiting_first_output", { threadId, turnId });
         },
-        onReconnect: (count, chars) => {
+        onReconnect: (count, chars, snapshot) => {
           reconnectCount = count;
           charsReceived = chars;
-          progress("reconnecting", { threadId, turnId: activeTurnId, reconnectCount });
+          if (!firstOutputAt && snapshot?.firstOutputAt) {
+            firstOutputAt = snapshot.firstOutputAt;
+          }
+          progress("reconnecting", {
+            threadId,
+            turnId: activeTurnId,
+            ...(firstOutputAt ? {
+              firstOutputAt,
+              firstOutputMs: new Date(firstOutputAt).getTime() - startMs,
+            } : {}),
+            ...(snapshot?.updatedAt ? { lastEventAt: snapshot.updatedAt } : {}),
+          });
         },
         cancelSignal: () => cancelled || existsSync(fp.cancel(reviewDir, sessionId)),
       });
@@ -1240,6 +1320,7 @@ async function workerMain(parsed) {
     progress(finalStatus, {
       charsReceived: turnResult.text.length,
       completedAt: new Date().toISOString(),
+      lastEventAt: new Date().toISOString(),
       outputFile,
       threadId,
       turnId: activeTurnId || turnResult.turnId || null,
@@ -1423,7 +1504,7 @@ function cmdStatus(parsed) {
   const pidAlive = pid ? isOurWorker(pid, pidData?.nonce) : false;
 
   // Detect crashed worker
-  if (!pidAlive && ["running", "reconnecting", "initializing", "queued"].includes(progress.status)) {
+  if (!pidAlive && ACTIVE_PROGRESS_STATUSES.has(progress.status)) {
     progress.status = "crashed";
     progress.error = "Worker process exited unexpectedly";
     // Check worker log for details
@@ -1438,7 +1519,7 @@ function cmdStatus(parsed) {
   }
 
   // Recalculate elapsed for running processes
-  if (["running", "reconnecting"].includes(progress.status) && progress.startedAt) {
+  if (ACTIVE_PROGRESS_STATUSES.has(progress.status) && progress.startedAt) {
     progress.elapsedMs = Date.now() - new Date(progress.startedAt).getTime();
   }
 
@@ -1452,6 +1533,11 @@ function cmdStatus(parsed) {
   // Exit code by status
   switch (progress.status) {
     case "completed":      process.exit(0); break;
+    case "connecting":
+    case "validating_model":
+    case "starting_thread":
+    case "waiting_first_output":
+    case "streaming":
     case "running":
     case "reconnecting":
     case "initializing":
@@ -1519,7 +1605,7 @@ async function cmdCancel(parsed) {
 
   // Update progress if still marked as running
   const progress = loadProgress(reviewDir, sessionId);
-  if (progress && ["running", "reconnecting", "initializing", "queued"].includes(progress.status)) {
+  if (progress && ACTIVE_PROGRESS_STATUSES.has(progress.status)) {
     saveProgress(reviewDir, sessionId, {
       ...progress,
       status: "cancelled",

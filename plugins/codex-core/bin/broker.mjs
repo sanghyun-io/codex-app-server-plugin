@@ -23,7 +23,7 @@
  *     { "type": "response", "id": N, "result": {...} }
  *     { "type": "response", "id": N, "error": {...} }
  *     { "type": "notification", "method": "...", "params": {...} }
- *     { "type": "pong" }
+ *     { "type": "response", "id": N, "result": { "ok": true } }
  *     { "type": "error", "message": "..." }
  *
  * Turn routing:
@@ -255,6 +255,7 @@ class AppServerConnection {
         status: "inProgress",
         error: null,
         startedAt: now,
+        firstOutputAt: null,
         updatedAt: now,
         completedAt: null,
       };
@@ -349,6 +350,7 @@ class AppServerConnection {
     if (!snapshot || snapshot.threadId !== threadId) return;
     snapshot.updatedAt = new Date().toISOString();
     if (method === "item/agentMessage/delta") {
+      if (!snapshot.firstOutputAt) snapshot.firstOutputAt = snapshot.updatedAt;
       snapshot.text += params?.delta || "";
     } else if (method === "turn/completed") {
       snapshot.status = params?.turn?.status || "unknown";
@@ -381,6 +383,7 @@ class BrokerServer {
     this.server = null;
     this.clients = new Set();
     this.idleTimer = null;
+    this.dropPingsForTest = false;
   }
 
   async start() {
@@ -475,6 +478,19 @@ class BrokerServer {
             break;
           }
 
+          case "test/set-drop-pings": {
+            if (process.env.CODEX_REVIEW_TEST_MODE !== "1") {
+              throw new Error("Test broker controls are disabled");
+            }
+            this.dropPingsForTest = !!msg.drop;
+            socket.write(JSON.stringify({
+              type: "response",
+              id: msg.id,
+              result: { drop: this.dropPingsForTest },
+            }) + "\n");
+            break;
+          }
+
           case "notify":
             this.appServer.notify(msg.method, msg.params);
             break;
@@ -494,7 +510,13 @@ class BrokerServer {
             break;
 
           case "ping":
-            socket.write(JSON.stringify({ type: "pong" }) + "\n");
+            if (!this.dropPingsForTest) {
+              socket.write(JSON.stringify({
+                type: "response",
+                id: msg.id,
+                result: { ok: true },
+              }) + "\n");
+            }
             break;
 
           default:

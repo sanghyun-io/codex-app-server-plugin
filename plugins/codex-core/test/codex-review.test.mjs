@@ -46,6 +46,7 @@ function cli(args, opts = {}) {
     FAKE_INTERRUPT_LOG: opts.interruptLog ?? "",
     FAKE_FOREIGN_DELTA: opts.foreignDelta ? "1" : "",
     CODEX_REVIEW_TEST_MODE: opts.testMode ? "1" : "",
+    CODEX_REVIEW_HEARTBEAT_MS: opts.heartbeatMs ? String(opts.heartbeatMs) : "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -289,6 +290,64 @@ describe("background mode", () => {
     assert.ok(completed, "Should complete within 15s");
     assert.ok(existsSync(output));
     assert.ok(readFileSync(output, "utf8").includes("APPROVE"));
+  });
+
+  it("publishes long-turn phases and latency metrics", async () => {
+    const promptText = readFileSync(prompt, "utf8");
+    const turnText = `${"S".repeat(180)}\n\n[VERDICT] - APPROVE`;
+    cli(["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR], {
+      cwd: TEST_DIR,
+      turnDelay: 500,
+      deltaInterval: 200,
+      turnText,
+    });
+
+    const observed = new Set();
+    let completed;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      await sleep(50);
+      const result = cli(["status", "--session", sid, "--review-dir", TEST_DIR]);
+      const progress = JSON.parse(result.stdout);
+      observed.add(progress.status);
+      if (result.exit === 0) {
+        completed = progress;
+        break;
+      }
+      assert.equal(result.exit, 7, result.stderr);
+    }
+
+    assert.ok(observed.has("waiting_first_output"), [...observed].join(", "));
+    assert.ok(observed.has("streaming"), [...observed].join(", "));
+    assert.equal(completed?.status, "completed");
+    assert.equal(completed.promptChars, promptText.length);
+    assert.equal(completed.projectRoot, realpathSync.native(resolve(__dirname, "../../..")));
+    assert.match(completed.threadId, /^fake-thread-/);
+    assert.match(completed.turnId, /^fake-turn-/);
+    assert.equal(completed.charsReceived, readFileSync(output, "utf8").length);
+    assert.ok(completed.firstOutputAt);
+    assert.ok(completed.firstOutputMs >= 400);
+    assert.ok(completed.lastEventAt);
+    assert.equal(completed.reconnectCount, 0);
+  });
+
+  it("warns for a large prompt without truncating it", () => {
+    const largePrompt = "P".repeat(131_073);
+    const requestLog = resolve(TEST_DIR, `${sid}_large_requests.jsonl`);
+    writeFileSync(prompt, largePrompt, "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+    ], { requestLog });
+
+    assert.equal(result.exit, 0, result.stderr);
+    const progress = readJson(resolve(TEST_DIR, `${sid}_progress.json`));
+    assert.match(progress.warnings?.[0] || "", /Large prompt \(131073 chars\)/);
+    const request = requestsByMethod(requestLog, "turn/start")[0];
+    assert.equal(request.params.input[0].text.length, largePrompt.length);
   });
 
   it("cancel stops running worker", async () => {
@@ -653,6 +712,60 @@ describe("broker turn multiplexing", () => {
     if (reconnectPort?.pid) {
       try { process.kill(reconnectPort.pid, "SIGTERM"); } catch { /* already stopped */ }
     }
+  });
+
+  it("reconnects after two missed broker heartbeats", async (t) => {
+    const home = resolve(TEST_DIR, `heartbeat_home_${Date.now()}`);
+    mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
+    t.after(() => {
+      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
+      if (port?.pid) {
+        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
+      }
+    });
+    const sid = newSid();
+    const promptPath = resolve(TEST_DIR, `${sid}_heartbeat_p.txt`);
+    const outputPath = resolve(TEST_DIR, `${sid}_heartbeat_o.txt`);
+    writeFileSync(promptPath, "Keep the long turn alive across a heartbeat failure.", "utf8");
+
+    const started = cli([
+      "start", promptPath, outputPath,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home,
+      turnDelay: 1800,
+      turnText: "Heartbeat recovery output.\n\n[VERDICT] - APPROVE",
+      heartbeatMs: 75,
+      testMode: true,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let progress;
+    const startDeadline = Date.now() + 10_000;
+    while (Date.now() < startDeadline) {
+      await sleep(50);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      progress = JSON.parse(status.stdout);
+      if (progress.turnId) break;
+    }
+    assert.ok(progress?.turnId, "turn id was not published");
+
+    await brokerControl(home, "test/set-drop-pings", { drop: true });
+    const reconnectDeadline = Date.now() + 5_000;
+    while (Date.now() < reconnectDeadline) {
+      await sleep(50);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      progress = JSON.parse(status.stdout);
+      if (progress.reconnectCount >= 1) break;
+    }
+    await brokerControl(home, "test/set-drop-pings", { drop: false });
+
+    assert.ok(progress?.reconnectCount >= 1, `reconnect count: ${progress?.reconnectCount}`);
+    const completed = await pollToComplete(sid, 30_000, home);
+    assert.equal(completed.status, "completed");
+    assert.match(readFileSync(outputPath, "utf8"), /Heartbeat recovery output/);
   });
 
   it("fails promptly with partial output and no replay after app server exit", async () => {
