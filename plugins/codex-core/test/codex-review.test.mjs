@@ -635,7 +635,9 @@ describe("broker turn multiplexing", () => {
     const unique = new Set(tags);
     assert.equal(unique.size, tags.length, `concurrent sessions leaked: ${tags}`);
     const elapsedMs = Date.now() - startedAt;
-    assert.ok(elapsedMs < 2300, `turns were serialized: ${elapsedMs}ms`);
+    // Three serialized 900ms turns take at least 2700ms before startup and
+    // polling overhead. Keep that boundary while allowing Windows CI jitter.
+    assert.ok(elapsedMs < 2700, `turns were serialized: ${elapsedMs}ms`);
   });
 
   it("direct mode ignores notifications for a foreign thread and turn", () => {
