@@ -145,6 +145,9 @@ class AppServerClient {
     this.msgId = 0;
     this.pendingRequests = new Map();
     this.notificationHandlers = new Map();
+    this.disconnectHandlers = new Set();
+    this.processExited = false;
+    this.closing = false;
   }
 
   nextId() {
@@ -166,6 +169,12 @@ class AppServerClient {
         } else {
           rejectP(new CodexError(6, `Process spawn error: ${err.message}`));
         }
+      });
+
+      this.proc.on("exit", (code, signal) => {
+        this._handleDisconnect(new Error(
+          `App server exited (code ${code ?? "unknown"}${signal ? `, signal ${signal}` : ""})`
+        ));
       });
 
       this.rl = createInterface({ input: this.proc.stdout });
@@ -196,6 +205,20 @@ class AppServerClient {
       const wildcard = this.notificationHandlers.get("*");
       if (wildcard) wildcard(msg.method, msg.params);
     }
+  }
+
+  _handleDisconnect(error) {
+    if (this.closing || this.processExited) return;
+    this.processExited = true;
+    const wrapped = new CodexError(6, error?.message || String(error));
+    for (const [, pending] of this.pendingRequests) pending.reject(wrapped);
+    this.pendingRequests.clear();
+    for (const handler of this.disconnectHandlers) handler(wrapped);
+  }
+
+  onDisconnect(handler) {
+    this.disconnectHandlers.add(handler);
+    return () => this.disconnectHandlers.delete(handler);
   }
 
   send(msg) {
@@ -301,11 +324,13 @@ class AppServerClient {
       let interruptReason = null;
       let interruptError = null;
       let interruptGraceTimer = null;
+      let pendingInterruptReason = null;
 
       const cleanup = () => {
         if (hardTimer) clearTimeout(hardTimer);
         if (cancelChecker) clearInterval(cancelChecker);
         if (interruptGraceTimer) clearTimeout(interruptGraceTimer);
+        removeDisconnectHandler();
         // Clear pending request timers to prevent event loop hang.
         // The turn/start request may never get a JSON-RPC response (only
         // notifications), leaving its timeout timer alive indefinitely.
@@ -329,14 +354,20 @@ class AppServerClient {
         rejectP(err);
       };
 
+      const removeDisconnectHandler = this.onDisconnect((error) => {
+        finish({
+          text: agentText,
+          status: "connection_failed_partial",
+          error: error.message,
+        });
+      });
+
       const requestInterrupt = async (reason) => {
         if (resolved || interruptSent) return;
-        if (!turnId) {
-          fail(new CodexError(5, `Turn ${reason} before a turn id was received`));
-          return;
-        }
+        pendingInterruptReason ||= reason;
+        if (!turnId) return;
         interruptSent = true;
-        interruptReason = reason;
+        interruptReason = pendingInterruptReason;
         interruptGraceTimer = setTimeout(() => {
           finish({ text: agentText, status: interruptReason, interruptError });
         }, INTERRUPT_GRACE_MS);
@@ -409,11 +440,14 @@ class AppServerClient {
           model: opts.model || DEFAULT_MODEL,
           effort: opts.effort || "high",
         },
-        timeoutMs || DEFAULT_HARD_TIMEOUT_MS
+        INIT_TIMEOUT_MS
       ).then((result) => {
         turnId = result?.turn?.id || null;
         if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
-        else opts.onStarted?.(turnId);
+        else {
+          opts.onStarted?.(turnId);
+          if (pendingInterruptReason) void requestInterrupt(pendingInterruptReason);
+        }
       }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
       });
@@ -421,8 +455,10 @@ class AppServerClient {
   }
 
   close() {
+    this.closing = true;
     this.notificationHandlers.clear();
     this.pendingRequests.clear();
+    this.disconnectHandlers.clear();
     if (this.rl) { this.rl.close(); this.rl = null; }
     if (this.proc) {
       try { this.proc.kill(); } catch { /* ignore */ }
@@ -479,6 +515,7 @@ class BrokerClient {
           this._handleDisconnect(err);
         }
       });
+
       this.socket.on("close", () => {
         if (this.connectionActive) this._handleDisconnect(new Error("Broker connection closed"));
       });
@@ -638,6 +675,7 @@ class BrokerClient {
       let reconnectCount = 0;
       let reconnecting = false;
       let interruptSent = false;
+      let pendingInterruptReason = null;
       let interruptReason = null;
       let interruptError = null;
       let interruptGraceTimer = null;
@@ -695,6 +733,8 @@ class BrokerClient {
                 text: agentText,
                 status: snapshot.status === "interrupted" ? "cancelled" : snapshot.status,
               });
+            } else if (pendingInterruptReason) {
+              void requestInterrupt(pendingInterruptReason);
             }
             return;
           } catch (error) {
@@ -728,12 +768,10 @@ class BrokerClient {
 
       const requestInterrupt = async (reason) => {
         if (resolved || interruptSent) return;
-        if (!turnId) {
-          fail(new CodexError(5, `Turn ${reason} before a turn id was received`));
-          return;
-        }
+        pendingInterruptReason ||= reason;
+        if (!turnId || reconnecting || !this.connectionActive) return;
         interruptSent = true;
-        interruptReason = reason;
+        interruptReason = pendingInterruptReason;
         interruptGraceTimer = setTimeout(() => {
           finish({ text: agentText, status: interruptReason, interruptError });
         }, INTERRUPT_GRACE_MS);
@@ -741,6 +779,11 @@ class BrokerClient {
           await this.interruptTurn(threadId, turnId);
         } catch (error) {
           interruptError = extractAppServerErrorMessage(error);
+          if (!this.connectionActive || reconnecting) {
+            interruptSent = false;
+            if (interruptGraceTimer) clearTimeout(interruptGraceTimer);
+            interruptGraceTimer = null;
+          }
         }
       };
 
@@ -798,13 +841,14 @@ class BrokerClient {
           model: opts.model || DEFAULT_MODEL,
           effort: opts.effort || "high",
         },
-        timeoutMs || DEFAULT_HARD_TIMEOUT_MS
+        INIT_TIMEOUT_MS
       ).then((result) => {
         turnId = result?.turn?.id || null;
         if (!turnId) fail(new CodexError(6, "Turn start returned no turn id"));
         else {
           opts.onStarted?.(turnId);
           heartbeatTimer = setInterval(() => { void heartbeat(); }, heartbeatMs);
+          if (pendingInterruptReason) void requestInterrupt(pendingInterruptReason);
         }
       }).catch((err) => {
         fail(err instanceof CodexError ? err : new CodexError(6, `Turn start failed: ${extractAppServerErrorMessage(err)}`));
@@ -1592,7 +1636,10 @@ async function cmdCancel(parsed) {
   log(`Cancellation requested for worker (PID: ${pid})`);
 
   // Allow cancel polling plus the full upstream interrupt grace period.
-  const gracefulDeadline = Date.now() + INTERRUPT_GRACE_MS + CANCEL_CHECK_MS + 1500;
+  const liveProgress = loadProgress(reviewDir, sessionId);
+  const turnStartAllowance = liveProgress?.turnId ? 0 : INIT_TIMEOUT_MS;
+  const gracefulDeadline = Date.now()
+    + turnStartAllowance + INTERRUPT_GRACE_MS + CANCEL_CHECK_MS + 1500;
   while (Date.now() < gracefulDeadline) {
     if (!isAlive(pid)) break;
     await sleep(200);
@@ -1635,7 +1682,10 @@ async function cmdClose(parsed) {
   const pidData = readPidFile(reviewDir, sessionId);
   if (pidData && isOurWorker(pidData.pid, pidData.nonce)) {
     writeFileSync(fp.cancel(reviewDir, sessionId), new Date().toISOString(), "utf8");
-    const gracefulDeadline = Date.now() + INTERRUPT_GRACE_MS + CANCEL_CHECK_MS + 1500;
+    const liveProgress = loadProgress(reviewDir, sessionId);
+    const turnStartAllowance = liveProgress?.turnId ? 0 : INIT_TIMEOUT_MS;
+    const gracefulDeadline = Date.now()
+      + turnStartAllowance + INTERRUPT_GRACE_MS + CANCEL_CHECK_MS + 1500;
     while (Date.now() < gracefulDeadline && isAlive(pidData.pid)) {
       await sleep(200);
     }

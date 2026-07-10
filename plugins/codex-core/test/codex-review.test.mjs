@@ -43,9 +43,11 @@ function cli(args, opts = {}) {
     FAKE_MODEL_PAGES: opts.modelPages ? JSON.stringify(opts.modelPages) : "",
     FAKE_MODEL_LIST_UNSUPPORTED: opts.modelListUnsupported ? "1" : "",
     FAKE_TURN_START_REJECT: opts.turnStartReject ?? "",
+    FAKE_TURN_START_RESPONSE_DELAY_MS: opts.turnStartResponseDelay ? String(opts.turnStartResponseDelay) : "",
     FAKE_INTERRUPT_LOG: opts.interruptLog ?? "",
     FAKE_INTERRUPT_DELAY_MS: opts.interruptDelay ? String(opts.interruptDelay) : "",
     FAKE_FOREIGN_DELTA: opts.foreignDelta ? "1" : "",
+    FAKE_EXIT_AFTER_FIRST_DELTA: opts.exitAfterFirstDelta ? "1" : "",
     CODEX_REVIEW_TEST_MODE: opts.testMode ? "1" : "",
     CODEX_REVIEW_HEARTBEAT_MS: opts.heartbeatMs ? String(opts.heartbeatMs) : "",
     CODEX_REVIEW_INTERRUPT_GRACE_MS: opts.interruptGrace ? String(opts.interruptGrace) : "",
@@ -898,6 +900,74 @@ describe("broker turn multiplexing", () => {
     assert.deepEqual(interrupts, [{ threadId: running.threadId, turnId: running.turnId }]);
   });
 
+  it("retries a queued interrupt after reconnect without duplicating it", async (t) => {
+    const home = resolve(TEST_DIR, `reconnect_cancel_home_${Date.now()}`);
+    mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
+    t.after(() => {
+      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
+      if (port?.pid) {
+        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
+      }
+    });
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_reconnect_cancel_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_reconnect_cancel_o.txt`);
+    const interruptLog = resolve(TEST_DIR, `${sid}_reconnect_cancel_interrupt.jsonl`);
+    writeFileSync(prompt, "Cancel while the broker connection is recovering.", "utf8");
+
+    const started = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home,
+      turnDelay: 5000,
+      interruptLog,
+      interruptGrace: 3000,
+      testMode: true,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let running;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      await sleep(50);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      running = JSON.parse(status.stdout);
+      if (running.turnId) break;
+    }
+    assert.ok(running?.turnId, `turn id was not published: ${JSON.stringify(running)}`);
+
+    await brokerControl(home, "test/disconnect-turn", {
+      threadId: running.threadId,
+      turnId: running.turnId,
+    });
+    await sleep(50);
+    const portPath = resolve(home, ".claude", "tmp", "broker.port");
+    const portData = readFileSync(portPath, "utf8");
+    rmSync(portPath, { force: true });
+    writeFileSync(resolve(TEST_DIR, `${sid}_cancel`), new Date().toISOString(), "utf8");
+    await sleep(700);
+    writeFileSync(portPath, portData, "utf8");
+
+    const terminalDeadline = Date.now() + 10_000;
+    let terminal;
+    while (Date.now() < terminalDeadline) {
+      await sleep(100);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      if (status.exit === 8) {
+        terminal = JSON.parse(status.stdout);
+        break;
+      }
+    }
+    assert.equal(terminal?.status, "cancelled");
+    assert.deepEqual(readRequests(interruptLog), [{
+      threadId: running.threadId,
+      turnId: running.turnId,
+    }]);
+  });
+
   it("close gracefully interrupts an active Windows worker", async (t) => {
     const home = resolve(TEST_DIR, `close_home_${Date.now()}`);
     mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
@@ -984,6 +1054,61 @@ describe("upstream timeout interruption", () => {
     assert.equal(interrupts[0].threadId, state.threadId);
     assert.ok(interrupts[0].turnId);
     assert.ok(existsSync(output));
+  });
+
+  it("waits for a delayed turn id before interrupting a timed-out turn", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_delayed_start_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_delayed_start_o.txt`);
+    const interruptLog = resolve(TEST_DIR, `${sid}_delayed_start_interrupt.jsonl`);
+    writeFileSync(prompt, "Time out before turn/start acknowledges the turn.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--timeout", "100",
+    ], {
+      turnStartResponseDelay: 500,
+      turnDelay: 5000,
+      interruptLog,
+      interruptGrace: 250,
+    });
+
+    assert.equal(result.exit, 5, result.stderr);
+    assert.deepEqual(readRequests(interruptLog), [{
+      threadId: "fake-thread-1",
+      turnId: "fake-turn-1",
+    }]);
+  });
+
+  it("saves partial output promptly when direct app-server exits", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_direct_crash_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_direct_crash_o.txt`);
+    writeFileSync(prompt, "Preserve direct-mode output after process exit.", "utf8");
+
+    const startedAt = Date.now();
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--timeout", "3000",
+    ], {
+      turnDelay: 50,
+      deltaInterval: 1000,
+      turnText: "D".repeat(120),
+      exitAfterFirstDelta: true,
+      interruptGrace: 250,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(result.exit, 6, result.stderr);
+    assert.ok(elapsedMs < 1200, `direct crash was not detected promptly: ${elapsedMs}ms`);
+    assert.ok(existsSync(output));
+    assert.ok(readFileSync(output, "utf8").length > 0);
   });
 });
 

@@ -254,6 +254,7 @@ class AppServerConnection {
         text: "",
         status: "inProgress",
         error: null,
+        interruptRequested: false,
         startedAt: now,
         firstOutputAt: null,
         updatedAt: now,
@@ -440,7 +441,21 @@ class BrokerServer {
         switch (msg.action) {
           case "request": {
             const timeoutMs = msg.timeout || INIT_TIMEOUT_MS;
-            const result = await this.appServer.request(msg.method, msg.params, timeoutMs);
+            let result;
+            if (msg.method === "turn/interrupt") {
+              const snapshot = this.appServer.getTurnSnapshot(
+                msg.params?.threadId,
+                msg.params?.turnId,
+              );
+              if (snapshot.interruptRequested) {
+                result = {};
+              } else {
+                this.appServer.turns.get(msg.params.turnId).interruptRequested = true;
+                result = await this.appServer.request(msg.method, msg.params, timeoutMs);
+              }
+            } else {
+              result = await this.appServer.request(msg.method, msg.params, timeoutMs);
+            }
             if (msg.method === "turn/start" && result?.turn?.id) {
               this.appServer.registerTurn(socket, msg.params?.threadId, result.turn.id);
             }

@@ -24,6 +24,7 @@ const TURN_DELAY = parseInt(process.env.FAKE_TURN_DELAY_MS || "200", 10);
 const TURN_TEXT = process.env.FAKE_TURN_TEXT || "Fake review output for testing.\n\n[VERDICT] - APPROVE";
 const TURN_FAIL = process.env.FAKE_TURN_FAIL || "";
 const TURN_START_REJECT = process.env.FAKE_TURN_START_REJECT || "";
+const TURN_START_RESPONSE_DELAY_MS = parseInt(process.env.FAKE_TURN_START_RESPONSE_DELAY_MS || "0", 10);
 const AUTH_FAIL = !!process.env.FAKE_AUTH_FAIL;
 const TAG_THREAD = !!process.env.FAKE_TAG_THREAD;
 const DELTA_INTERVAL_MS = parseInt(process.env.FAKE_DELTA_INTERVAL_MS || "20", 10);
@@ -31,6 +32,7 @@ const REQUEST_LOG = process.env.FAKE_REQUEST_LOG || "";
 const INTERRUPT_LOG = process.env.FAKE_INTERRUPT_LOG || "";
 const INTERRUPT_DELAY_MS = parseInt(process.env.FAKE_INTERRUPT_DELAY_MS || "0", 10);
 const FOREIGN_DELTA = !!process.env.FAKE_FOREIGN_DELTA;
+const EXIT_AFTER_FIRST_DELTA = !!process.env.FAKE_EXIT_AFTER_FIRST_DELTA;
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -138,10 +140,12 @@ function handleRequest(msg) {
       const threadId = params.threadId;
       const turnId = `fake-turn-${++turnCounter}`;
 
-      send({
-        id,
-        result: { turn: { id: turnId, status: "inProgress", items: [], error: null } },
-      });
+      setTimeout(() => {
+        send({
+          id,
+          result: { turn: { id: turnId, status: "inProgress", items: [], error: null } },
+        });
+      }, TURN_START_RESPONSE_DELAY_MS);
 
       setTimeout(() => {
         if (interruptedTurns.has(turnId)) return;
@@ -174,6 +178,7 @@ function handleRequest(msg) {
         }
 
         let delay = 0;
+        let sentDeltas = 0;
         for (const chunk of chunks) {
           setTimeout(() => {
             if (interruptedTurns.has(turnId)) return;
@@ -181,6 +186,10 @@ function handleRequest(msg) {
               method: "item/agentMessage/delta",
               params: { threadId, turnId, itemId: `item-${turnId}`, delta: chunk },
             });
+            sentDeltas += 1;
+            if (EXIT_AFTER_FIRST_DELTA && sentDeltas === 1) {
+              setTimeout(() => process.exit(42), 10);
+            }
           }, delay);
           delay += DELTA_INTERVAL_MS;
         }
