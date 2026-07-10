@@ -140,12 +140,16 @@ node --test --test-name-pattern="model payload consistency" plugins/codex-core/t
 
 Expected: FAIL because the current wrapper sends `gpt-5.5` and does not parse `--default-model`.
 
-- [ ] **Step 5: Commit the test harness and failing regression tests**
+- [ ] **Step 5: Add a failing broker-boundary model test**
 
-```powershell
-git add plugins/codex-core/test/fake-codex.mjs plugins/codex-core/test/codex-review.test.mjs
-git commit -m "test(core): capture App Server model payloads"
+Create an isolated broker home and start a background session with `--model gpt-5.6-sol`. Poll it to completion, then assert its shared fake request log contains both:
+
+```js
+assert.equal(requests.find(r => r.method === "thread/start").params.model, "gpt-5.6-sol");
+assert.equal(requests.find(r => r.method === "turn/start").params.model, "gpt-5.6-sol");
 ```
+
+Run the focused suite again and confirm this case is RED for the same missing protocol-boundary guarantee. Do not commit while the suite is failing; Task 2 commits the regression tests together with the GREEN implementation.
 
 ### Task 2: Implement GPT-5.6 resolution and account-aware fail-fast validation
 
@@ -229,21 +233,22 @@ function normalizeModelCatalog(result) {
 }
 
 async function validateModelAvailability(client, model) {
+  let result;
   try {
-    const catalog = normalizeModelCatalog(await client.listModels());
-    if (catalog.accepted.size > 0 && !catalog.accepted.has(model)) {
-      throw new CodexError(6, [
-        `Model "${model}" is not available for the current Codex account.`,
-        `Available models: ${catalog.visible.join(", ") || "none reported"}`,
-        "No fallback was performed. Choose a supported model with --model or CODEX_REVIEW_MODEL.",
-      ].join("\n"));
-    }
-    return catalog.visible;
+    result = await client.listModels();
   } catch (err) {
-    if (err instanceof CodexError) throw err;
     log(`Warning: could not validate model availability (${err.message || JSON.stringify(err)}); continuing without preflight validation.`);
     return [];
   }
+  const catalog = normalizeModelCatalog(result);
+  if (catalog.accepted.size > 0 && !catalog.accepted.has(model)) {
+    throw new CodexError(6, [
+      `Model "${model}" is not available for the current Codex account.`,
+      `Available models: ${catalog.visible.join(", ") || "none reported"}`,
+      "No fallback was performed. Choose a supported model with --model or CODEX_REVIEW_MODEL.",
+    ].join("\n"));
+  }
+  return catalog.visible;
 }
 ```
 
