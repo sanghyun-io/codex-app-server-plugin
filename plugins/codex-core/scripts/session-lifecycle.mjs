@@ -14,17 +14,40 @@
  *   HOME                — User home directory
  */
 
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "";
 const TMP_DIR = resolve(HOME, ".claude", "tmp");
-const SESSION_ID = process.env.CLAUDE_SESSION_ID || "";
 const HOOK_EVENT = process.argv[2] || ""; // "start" or "end"
 
 function log(msg) {
   process.stderr.write(`[session-lifecycle] ${msg}\n`);
 }
+
+function readHookInput() {
+  if (process.stdin.isTTY) return {};
+  try {
+    const raw = readFileSync(0, "utf8").trim();
+    return raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    log(`Warning: Could not parse hook input: ${err.message}`);
+    return {};
+  }
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function safeSessionId(value) {
+  return String(value).replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+const hookInput = readHookInput();
+const SESSION_ID = hookInput.session_id || process.env.CLAUDE_SESSION_ID || "";
 
 function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -44,8 +67,15 @@ function removeFile(path) {
 // ---------------------------------------------------------------------------
 
 function onSessionStart() {
+  if (!SESSION_ID) {
+    log("Warning: SessionStart has no session identity; skipping owner export");
+    return;
+  }
+
+  mkdirSync(TMP_DIR, { recursive: true });
+
   // Write session env file for worker coordination
-  const envPath = resolve(TMP_DIR, `session_${SESSION_ID}.env`);
+  const envPath = resolve(TMP_DIR, `session_${safeSessionId(SESSION_ID)}.env`);
   const envContent = [
     `SESSION_ID=${SESSION_ID}`,
     `STARTED_AT=${new Date().toISOString()}`,
@@ -57,6 +87,21 @@ function onSessionStart() {
     log(`Session started: ${SESSION_ID}`);
   } catch (err) {
     log(`Warning: Could not write session env: ${err.message}`);
+  }
+
+  const claudeEnvFile = process.env.CLAUDE_ENV_FILE;
+  if (claudeEnvFile) {
+    try {
+      appendFileSync(
+        claudeEnvFile,
+        `export CODEX_REVIEW_OWNER_SESSION=${shellQuote(SESSION_ID)}\n`,
+        "utf8",
+      );
+    } catch (err) {
+      log(`Warning: Could not export session ownership: ${err.message}`);
+    }
+  } else {
+    log("Warning: CLAUDE_ENV_FILE is unavailable; review ownership was not exported");
   }
 }
 
