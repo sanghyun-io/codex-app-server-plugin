@@ -115,57 +115,50 @@ function onSessionEnd() {
     return;
   }
 
-  let killedWorkers = 0;
-  let cleanedFiles = 0;
+  if (!SESSION_ID) {
+    log("Warning: SessionEnd has no session identity; skipping worker cleanup");
+    return;
+  }
+
+  let cancellationRequests = 0;
 
   try {
     const files = readdirSync(TMP_DIR);
 
-    // 1. Kill all running workers (find PID files)
+    // Cancel only workers that prove ownership by this Claude session.
     const pidFiles = files.filter(f => f.endsWith("_pid"));
     for (const pidFile of pidFiles) {
       const pidPath = resolve(TMP_DIR, pidFile);
       const pidData = readJson(pidPath);
-      if (!pidData) continue;
+      if (!pidData || pidData.ownerSessionId !== SESSION_ID) continue;
 
+      const reviewSession = pidFile.slice(0, -"_pid".length);
+      const cancelPath = resolve(TMP_DIR, `${reviewSession}_cancel`);
       const pid = pidData.pid;
+      try {
+        writeFileSync(cancelPath, new Date().toISOString(), "utf8");
+      } catch (err) {
+        log(`Warning: Could not request cancellation for ${reviewSession}: ${err.message}`);
+        continue;
+      }
+
+      cancellationRequests++;
       if (pid && isAlive(pid)) {
         try {
           process.kill(pid, "SIGTERM");
-          killedWorkers++;
-          log(`Killed worker PID ${pid} (${pidFile})`);
+          log(`Requested cancellation for worker PID ${pid} (${pidFile})`);
         } catch (err) {
-          log(`Warning: Could not kill PID ${pid}: ${err.message}`);
+          log(`Warning: Could not signal PID ${pid}: ${err.message}`);
         }
       }
-      removeFile(pidPath);
     }
 
-    // 2. Kill broker if running
-    const brokerPortFile = resolve(TMP_DIR, "broker.port");
-    const brokerData = readJson(brokerPortFile);
-    if (brokerData?.pid && isAlive(brokerData.pid)) {
-      try {
-        process.kill(brokerData.pid, "SIGTERM");
-        log(`Killed broker PID ${brokerData.pid}`);
-      } catch { /* ignore */ }
-    }
-    removeFile(brokerPortFile);
-
-    // 3. Clean up session files (progress, state, logs, env)
-    const sessionPatterns = ["_progress.json", "_state.json", "_worker.log"];
-    for (const file of files) {
-      if (sessionPatterns.some(p => file.endsWith(p))) {
-        removeFile(resolve(TMP_DIR, file));
-        cleanedFiles++;
-      }
-    }
-
-    // Clean up session env file
-    const envFile = resolve(TMP_DIR, `session_${SESSION_ID}.env`);
+    // The broker is user-wide and owns its idle shutdown. SessionEnd must not
+    // mutate it or delete review control files that workers still need.
+    const envFile = resolve(TMP_DIR, `session_${safeSessionId(SESSION_ID)}.env`);
     removeFile(envFile);
 
-    log(`Session ended: killed ${killedWorkers} worker(s), cleaned ${cleanedFiles} file(s)`);
+    log(`Session ended: requested cancellation for ${cancellationRequests} owned worker(s)`);
   } catch (err) {
     log(`Warning: Cleanup error: ${err.message}`);
   }
