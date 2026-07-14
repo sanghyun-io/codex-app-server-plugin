@@ -1016,7 +1016,8 @@ function loadProgress(dir, sid) { return readJson(fp.progress(dir, sid)); }
 function saveProgress(dir, sid, data) { writeJsonAtomic(fp.progress(dir, sid), data); }
 
 /**
- * PID file stores JSON: { pid, nonce } for identity verification.
+ * PID file stores JSON: { pid, nonce, ownerSessionId? } for identity verification
+ * and Claude-session-scoped lifecycle cleanup.
  * Nonce is checked against /proc/<pid>/cmdline before signaling
  * to prevent killing a recycled PID belonging to a different process.
  */
@@ -1026,12 +1027,22 @@ function readPidFile(dir, sid) {
   const data = readJson(p);
   if (!data) return null;
   // Handle legacy bare-number format
-  if (typeof data === "number") return { pid: data, nonce: null };
-  return { pid: data.pid, nonce: data.nonce || null };
+  if (typeof data === "number") {
+    return { pid: data, nonce: null, ownerSessionId: null };
+  }
+  return {
+    pid: data.pid,
+    nonce: data.nonce || null,
+    ownerSessionId: data.ownerSessionId || null,
+  };
 }
 
-function writePidFile(dir, sid, pid, nonce) {
-  writeJson(fp.pid(dir, sid), { pid, nonce });
+function writePidFile(dir, sid, pid, nonce, ownerSessionId = null) {
+  writeJson(fp.pid(dir, sid), {
+    pid,
+    nonce,
+    ...(ownerSessionId ? { ownerSessionId } : {}),
+  });
 }
 
 function isAlive(pid) {
@@ -1467,8 +1478,14 @@ function spawnWorker(parsed) {
     windowsHide: true,
   });
 
-  // Write PID file with nonce for identity verification
-  writePidFile(reviewDir, sessionId, worker.pid, nonce);
+  // Write PID file with nonce and optional Claude session ownership.
+  writePidFile(
+    reviewDir,
+    sessionId,
+    worker.pid,
+    nonce,
+    process.env.CODEX_REVIEW_OWNER_SESSION || null,
+  );
 
   worker.unref();
   closeSync(logFd);

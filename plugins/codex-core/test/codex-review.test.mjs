@@ -51,6 +51,7 @@ function cli(args, opts = {}) {
     CODEX_REVIEW_TEST_MODE: opts.testMode ? "1" : "",
     CODEX_REVIEW_HEARTBEAT_MS: opts.heartbeatMs ? String(opts.heartbeatMs) : "",
     CODEX_REVIEW_INTERRUPT_GRACE_MS: opts.interruptGrace ? String(opts.interruptGrace) : "",
+    CODEX_REVIEW_OWNER_SESSION: opts.ownerSession ?? "",
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -274,6 +275,20 @@ describe("background mode", () => {
     assert.ok(data.pid > 0);
     assert.equal(typeof data.nonce, "string");
     assert.equal(data.nonce.length, 16);
+  });
+
+  it("stores the owning Claude session in background PID metadata", () => {
+    const args = ["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR];
+    try {
+      const r = cli(args, { ownerSession: "claude-A", turnDelay: 10_000 });
+      assert.equal(r.exit, 0, r.stderr);
+      const data = readJson(resolve(TEST_DIR, `${sid}_pid`));
+      assert.equal(data.ownerSessionId, "claude-A");
+    } finally {
+      cli(["cancel", "--session", sid, "--review-dir", TEST_DIR], {
+        interruptGrace: 100,
+      });
+    }
   });
 
   it("status → polling → completed", async () => {
