@@ -4,12 +4,13 @@
  * Session Lifecycle Hook — SessionStart / SessionEnd handler
  *
  * SessionStart: Exports session metadata to env file for worker coordination.
- * SessionEnd:   Kills all running workers, shuts down broker, cleans up temp files.
+ * SessionEnd:   Cancels only workers owned by the ending Claude session.
  *
  * Invoked by Claude Code hooks system via hooks.json.
  *
  * Environment:
- *   CLAUDE_SESSION_ID   — Current session ID (set by Claude Code)
+ *   CLAUDE_ENV_FILE     — SessionStart environment export file (set by Claude Code)
+ *   CLAUDE_SESSION_ID   — Compatibility fallback for manual/older integrations
  *   CLAUDE_PLUGIN_ROOT  — Plugin root directory
  *   HOME                — User home directory
  */
@@ -144,11 +145,18 @@ function onSessionEnd() {
 
       cancellationRequests++;
       if (pid && isAlive(pid)) {
-        try {
-          process.kill(pid, "SIGTERM");
-          log(`Requested cancellation for worker PID ${pid} (${pidFile})`);
-        } catch (err) {
-          log(`Warning: Could not signal PID ${pid}: ${err.message}`);
+        if (process.platform === "win32") {
+          // On Windows, external SIGTERM terminates Node immediately instead
+          // of reliably running its handler. Let the worker poll the marker so
+          // it can interrupt upstream and persist partial output first.
+          log(`Requested marker-based cancellation for worker PID ${pid} (${pidFile})`);
+        } else {
+          try {
+            process.kill(pid, "SIGTERM");
+            log(`Requested cancellation for worker PID ${pid} (${pidFile})`);
+          } catch (err) {
+            log(`Warning: Could not signal PID ${pid}: ${err.message}`);
+          }
         }
       }
     }

@@ -105,9 +105,10 @@ with both formats.
 
 On `SessionEnd`, the lifecycle hook examines PID records and selects only
 those whose `ownerSessionId` exactly matches the parsed ending session ID.
-For each selected worker it writes the existing cancellation marker before
-sending `SIGTERM`. This mirrors the wrapper's cancellation protocol and lets
-the worker interrupt the upstream turn and preserve partial output.
+For each selected worker it writes the existing cancellation marker. On
+POSIX it may also send `SIGTERM` to wake the worker's handler. On Windows it
+must not send external `SIGTERM`, which terminates Node before its handler can
+reliably preserve partial output; the worker polls the marker instead.
 
 The hook does not immediately delete progress, state, worker log, PID, or
 cancellation files. The worker owns its terminal update and PID cleanup, and
@@ -142,7 +143,7 @@ responsibility.
 - Missing `CLAUDE_ENV_FILE` does not fail `SessionStart`; ownership will be
   absent and cleanup will fail closed.
 - Malformed PID files are skipped without affecting other records.
-- Failure to write a cancellation marker or signal a selected worker is
+- Failure to write a cancellation marker or, where applicable, signal a selected worker is
   logged and does not broaden cleanup to other workers.
 - Broker state is never mutated by `SessionEnd`, including on partial errors.
 
@@ -169,7 +170,8 @@ the installed runtime files with the verified repository copies.
 
 - Closing one Claude Code session cannot terminate or erase another session's
   active review.
-- The ending session's owned workers receive the normal cancellation signal.
+- The ending session's owned workers receive the normal cancellation marker
+  without forced Windows termination.
 - A session exit cannot terminate the shared broker.
 - Hook ownership comes from Claude Code's stdin `session_id` and is propagated
   to background worker PID metadata.

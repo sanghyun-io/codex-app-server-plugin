@@ -52,6 +52,31 @@ function spawnSleeper() {
   return child;
 }
 
+function spawnCancelAwareWorker(cancelPath, observedPath, readyPath) {
+  const script = [
+    'const { existsSync, writeFileSync } = require("node:fs");',
+    'process.on("SIGTERM", () => {});',
+    'writeFileSync(process.env.READY_PATH, "ready", "utf8");',
+    'setInterval(() => {',
+    '  if (!existsSync(process.env.CANCEL_PATH)) return;',
+    '  writeFileSync(process.env.OBSERVED_PATH, "cancelled", "utf8");',
+    '  process.exit(0);',
+    '}, 25);',
+  ].join("\n");
+  const child = spawn(process.execPath, ["-e", script], {
+    env: {
+      ...process.env,
+      CANCEL_PATH: cancelPath,
+      OBSERVED_PATH: observedPath,
+      READY_PATH: readyPath,
+    },
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  children.push(child);
+  return child;
+}
+
 function isAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -64,6 +89,13 @@ function isAlive(pid) {
 async function waitForExit(pid, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && isAlive(pid)) {
+    await new Promise(resolveP => setTimeout(resolveP, 25));
+  }
+}
+
+async function waitForFile(path, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !existsSync(path)) {
     await new Promise(resolveP => setTimeout(resolveP, 25));
   }
 }
@@ -122,15 +154,24 @@ describe("session lifecycle hook", () => {
 
   it("ends only workers owned by the ending Claude session", async () => {
     const home = makeHome();
-    const owned = spawnSleeper();
+    const observedPath = tmp(home, "rr_owned_cancel_observed");
+    const readyPath = tmp(home, "rr_owned_ready");
+    const owned = spawnCancelAwareWorker(
+      tmp(home, "rr_owned_cancel"),
+      observedPath,
+      readyPath,
+    );
     const foreign = spawnSleeper();
     writePid(home, "rr_owned", owned.pid, "claude-A");
     writePid(home, "rr_foreign", foreign.pid, "claude-B");
+    await waitForFile(readyPath);
+    assert.ok(existsSync(readyPath), "owned worker should be ready");
 
     runHook("end", { home, input: { session_id: "claude-A" } });
 
     await waitForExit(owned.pid);
     assert.equal(isAlive(owned.pid), false, "owned worker should exit");
+    assert.ok(existsSync(observedPath), "owned worker should observe its cancellation marker");
     assert.equal(isAlive(foreign.pid), true, "foreign worker must stay alive");
     assert.ok(existsSync(tmp(home, "rr_owned_cancel")));
     assert.ok(existsSync(tmp(home, "rr_owned_pid")));

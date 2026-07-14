@@ -4,7 +4,7 @@
 
 **Goal:** Prevent one Claude Code session from terminating reviews owned by other sessions, while applying the verified fix to the current local plugin installation.
 
-**Architecture:** Claude Code's stdin hook payload becomes the source of the owner session ID. `SessionStart` propagates that identity through `CLAUDE_ENV_FILE`, the wrapper stores it in PID metadata, and `SessionEnd` writes cancellation markers and signals only matching workers. The shared broker remains under its existing idle-timeout lifecycle.
+**Architecture:** Claude Code's stdin hook payload becomes the source of the owner session ID. `SessionStart` propagates that identity through `CLAUDE_ENV_FILE`, the wrapper stores it in PID metadata, and `SessionEnd` writes cancellation markers only for matching workers. POSIX workers may also receive `SIGTERM`; Windows workers poll the marker to preserve partial output. The shared broker remains under its existing idle-timeout lifecycle.
 
 **Tech Stack:** Node.js ESM and built-ins, Node test runner, Claude Code command hooks, JSON control files, PowerShell/Git Bash installation tooling.
 
@@ -197,7 +197,9 @@ for (const pidFile of pidFiles) {
 
   const sessionName = pidFile.slice(0, -"_pid".length);
   writeFileSync(resolve(TMP_DIR, `${sessionName}_cancel`), new Date().toISOString(), "utf8");
-  if (pidData.pid && isAlive(pidData.pid)) process.kill(pidData.pid, "SIGTERM");
+  if (process.platform !== "win32" && pidData.pid && isAlive(pidData.pid)) {
+    process.kill(pidData.pid, "SIGTERM");
+  }
 }
 ```
 
