@@ -70,6 +70,7 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
   "firstOutputMs": 9700,
   "lastEventAt": "2026-04-10T10:24:30.123Z",
   "reconnectCount": 0,
+  "reconnectAttemptCount": 0,
   "pid": 12345,
   "pidAlive": true
 }

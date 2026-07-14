@@ -30,7 +30,7 @@
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/session-lifecycle.mjs end",
             "timeout": 10000,
-            "description": "Kill running workers, shut down broker, clean up temp files"
+            "description": "Cancel session-owned workers with bounded, identity-verified escalation"
           }
         ]
       }

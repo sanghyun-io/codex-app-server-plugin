@@ -257,7 +257,7 @@ class AppServerClient {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.5.0" },
+      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.5.1" },
     });
     this.notify("initialized");
     return result;
@@ -673,6 +673,7 @@ class BrokerClient {
       let resolved = false;
       let turnId = null;
       let reconnectCount = 0;
+      let reconnectAttemptCount = 0;
       let reconnecting = false;
       let interruptSent = false;
       let pendingInterruptReason = null;
@@ -719,6 +720,8 @@ class BrokerClient {
         reconnecting = true;
         let lastError = null;
         for (const delayMs of reconnectDelays) {
+          reconnectAttemptCount += 1;
+          opts.onReconnectAttempt?.(reconnectAttemptCount, delayMs);
           await sleep(delayMs);
           try {
             await this.reconnect();
@@ -1204,6 +1207,7 @@ async function workerMain(parsed) {
   let charsReceived = 0;
   let activeTurnId = null;
   let reconnectCount = 0;
+  let reconnectAttemptCount = 0;
   let currentPhase = "connecting";
   let firstOutputAt = null;
   const warnings = promptText.length > LARGE_PROMPT_CHARS
@@ -1219,6 +1223,7 @@ async function workerMain(parsed) {
     promptChars: promptText.length,
     charsReceived: 0,
     reconnectCount: 0,
+    reconnectAttemptCount: 0,
     ...(warnings.length ? { warnings } : {}),
   };
 
@@ -1346,6 +1351,14 @@ async function workerMain(parsed) {
               firstOutputMs: new Date(firstOutputAt).getTime() - startMs,
             } : {}),
             ...(snapshot?.updatedAt ? { lastEventAt: snapshot.updatedAt } : {}),
+          });
+        },
+        onReconnectAttempt: (attempt) => {
+          reconnectAttemptCount = attempt;
+          progress("reconnecting", {
+            threadId,
+            turnId: activeTurnId,
+            reconnectAttemptCount,
           });
         },
         cancelSignal: () => cancelled || existsSync(fp.cancel(reviewDir, sessionId)),

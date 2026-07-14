@@ -174,6 +174,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
   "firstOutputMs": 12800,
   "lastEventAt": "2026-03-23T...",
   "reconnectCount": 0,
+  "reconnectAttemptCount": 0,
   "pid": 12345,
   "pidAlive": true
 }

@@ -16,7 +16,6 @@ import {
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
-import { createInterface } from "node:readline";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(__dirname, "../bin/codex-review.mjs");
@@ -83,28 +82,89 @@ function requestsByMethod(path, method) {
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function brokerControl(home, action, params = {}) {
+function isProcessAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function stopBroker(home) {
   const portFile = resolve(home, ".claude", "tmp", "broker.port");
-  const { port } = readJson(portFile);
-  return await new Promise((resolveP, rejectP) => {
+  if (!existsSync(portFile)) return;
+  let pid;
+  try { pid = readJson(portFile)?.pid; } catch { return; }
+  if (!pid || !isProcessAlive(pid)) return;
+  try { process.kill(pid, "SIGTERM"); } catch { return; }
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && isProcessAlive(pid)) {
+    await sleep(25);
+  }
+  if (isProcessAlive(pid)) {
+    throw new Error(`Broker PID ${pid} did not exit after SIGTERM`);
+  }
+}
+
+function brokerControlAttempt(port, action, params, timeoutMs) {
+  return new Promise((resolveP, rejectP) => {
     const socket = createConnection({ host: "127.0.0.1", port });
-    const rl = createInterface({ input: socket });
+    let settled = false;
+    let buffered = "";
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        socket.destroy();
+        rejectP(error);
+      } else {
+        socket.end();
+        resolveP(result);
+      }
+    };
     const timer = setTimeout(() => {
-      socket.destroy();
-      rejectP(new Error(`Broker control timed out: ${action}`));
-    }, 5000);
+      finish(new Error(`Broker control attempt timed out: ${action}`));
+    }, timeoutMs);
     socket.on("connect", () => {
       socket.write(JSON.stringify({ action, id: 1, ...params }) + "\n");
     });
-    socket.on("error", rejectP);
-    rl.on("line", (line) => {
-      const message = JSON.parse(line);
-      if (message.id !== 1) return;
-      clearTimeout(timer);
-      socket.end();
-      message.error ? rejectP(message.error) : resolveP(message.result);
+    socket.on("error", error => finish(error));
+    socket.on("close", () => {
+      if (!settled) finish(new Error(`Broker control connection closed: ${action}`));
+    });
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffered += chunk;
+      let newline;
+      while ((newline = buffered.indexOf("\n")) !== -1) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        let message;
+        try { message = JSON.parse(line); } catch { continue; }
+        if (message.id !== 1) continue;
+        const error = message.error
+          ? new Error(message.error.message || JSON.stringify(message.error))
+          : null;
+        if (error) error.nonRetryable = true;
+        finish(error, message.result);
+        return;
+      }
     });
   });
+}
+
+async function brokerControl(home, action, params = {}) {
+  const portFile = resolve(home, ".claude", "tmp", "broker.port");
+  const deadline = Date.now() + 5000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const { port } = readJson(portFile);
+      return await brokerControlAttempt(port, action, params, Math.min(750, deadline - Date.now()));
+    } catch (error) {
+      if (error.nonRetryable) throw error;
+      lastError = error;
+      await sleep(50);
+    }
+  }
+  throw new Error(`Broker control failed: ${action}: ${lastError?.message || "unknown error"}`);
 }
 
 // ---- Setup ----
@@ -462,19 +522,12 @@ describe("error handling", () => {
 describe("broker model error handling", () => {
   const ERROR_BROKER_HOME = resolve(TEST_DIR, "error_broker_home");
   const ERROR_BROKER_TMP = resolve(ERROR_BROKER_HOME, ".claude", "tmp");
-  const ERROR_BROKER_PORT_FILE = resolve(ERROR_BROKER_TMP, "broker.port");
 
   before(() => {
     mkdirSync(ERROR_BROKER_TMP, { recursive: true });
   });
 
-  after(() => {
-    if (!existsSync(ERROR_BROKER_PORT_FILE)) return;
-    try {
-      const data = readJson(ERROR_BROKER_PORT_FILE);
-      if (data?.pid) process.kill(data.pid, "SIGTERM");
-    } catch { /* already stopped */ }
-  });
+  after(async () => stopBroker(ERROR_BROKER_HOME));
 
   it("preserves nested turn/start errors and lists model alternatives", () => {
     const sid = newSid();
@@ -514,15 +567,9 @@ describe("broker model error handling", () => {
 describe("broker turn multiplexing", () => {
   const BROKER_HOME = resolve(TEST_DIR, "broker_home");
   const BROKER_TMP = resolve(BROKER_HOME, ".claude", "tmp");
-  const BROKER_PORT_FILE = resolve(BROKER_TMP, "broker.port");
 
-  before(() => {
-    if (existsSync(BROKER_PORT_FILE)) {
-      try {
-        const stale = readJson(BROKER_PORT_FILE);
-        if (stale?.pid) process.kill(stale.pid, "SIGTERM");
-      } catch { /* already stopped */ }
-    }
+  before(async () => {
+    await stopBroker(BROKER_HOME);
     rmSync(BROKER_HOME, { recursive: true, force: true });
     mkdirSync(BROKER_TMP, { recursive: true });
     const sid = newSid();
@@ -544,17 +591,7 @@ describe("broker turn multiplexing", () => {
     assert.equal(warmed.exit, 0, warmed.stderr);
   });
 
-  after(() => {
-    // Kill any broker we started so it doesn't linger between runs
-    if (existsSync(BROKER_PORT_FILE)) {
-      try {
-        const data = JSON.parse(readFileSync(BROKER_PORT_FILE, "utf8"));
-        if (data?.pid) {
-          try { process.kill(data.pid, "SIGTERM"); } catch { /* already dead */ }
-        }
-      } catch { /* ignore */ }
-    }
-  });
+  after(async () => stopBroker(BROKER_HOME));
 
   async function pollToComplete(sid, timeoutMs = 30_000, home = BROKER_HOME) {
     const deadline = Date.now() + timeoutMs;
@@ -684,12 +721,7 @@ describe("broker turn multiplexing", () => {
   it("reattaches after a broker disconnect without duplicating output", async (t) => {
     const reconnectHome = resolve(TEST_DIR, `reconnect_home_${Date.now()}`);
     mkdirSync(resolve(reconnectHome, ".claude", "tmp"), { recursive: true });
-    t.after(() => {
-      const port = readJson(resolve(reconnectHome, ".claude", "tmp", "broker.port"));
-      if (port?.pid) {
-        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
-      }
-    });
+    t.after(async () => stopBroker(reconnectHome));
     const sid = newSid();
     const promptPath = resolve(TEST_DIR, `${sid}_reattach_p.txt`);
     const outputPath = resolve(TEST_DIR, `${sid}_reattach_o.txt`);
@@ -749,12 +781,7 @@ describe("broker turn multiplexing", () => {
   it("reconnects after two missed broker heartbeats", async (t) => {
     const home = resolve(TEST_DIR, `heartbeat_home_${Date.now()}`);
     mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
-    t.after(() => {
-      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
-      if (port?.pid) {
-        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
-      }
-    });
+    t.after(async () => stopBroker(home));
     const sid = newSid();
     const promptPath = resolve(TEST_DIR, `${sid}_heartbeat_p.txt`);
     const outputPath = resolve(TEST_DIR, `${sid}_heartbeat_o.txt`);
@@ -808,12 +835,7 @@ describe("broker turn multiplexing", () => {
   it("fails promptly with partial output and no replay after app server exit", async (t) => {
     const crashHome = resolve(TEST_DIR, `crash_home_${Date.now()}`);
     mkdirSync(resolve(crashHome, ".claude", "tmp"), { recursive: true });
-    t.after(() => {
-      const port = readJson(resolve(crashHome, ".claude", "tmp", "broker.port"));
-      if (port?.pid) {
-        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
-      }
-    });
+    t.after(async () => stopBroker(crashHome));
     const sid = newSid();
     const promptPath = resolve(TEST_DIR, `${sid}_crash_p.txt`);
     const outputPath = resolve(TEST_DIR, `${sid}_crash_o.txt`);
@@ -876,12 +898,7 @@ describe("broker turn multiplexing", () => {
   it("cancel interrupts the upstream turn exactly once", async (t) => {
     const home = resolve(TEST_DIR, `cancel_home_${Date.now()}`);
     mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
-    t.after(() => {
-      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
-      if (port?.pid) {
-        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
-      }
-    });
+    t.after(async () => stopBroker(home));
     const sid = newSid();
     const prompt = resolve(TEST_DIR, `${sid}_interrupt_p.txt`);
     const output = resolve(TEST_DIR, `${sid}_interrupt_o.txt`);
@@ -918,12 +935,7 @@ describe("broker turn multiplexing", () => {
   it("retries a queued interrupt after reconnect without duplicating it", async (t) => {
     const home = resolve(TEST_DIR, `reconnect_cancel_home_${Date.now()}`);
     mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
-    t.after(() => {
-      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
-      if (port?.pid) {
-        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
-      }
-    });
+    t.after(async () => stopBroker(home));
     const sid = newSid();
     const prompt = resolve(TEST_DIR, `${sid}_reconnect_cancel_p.txt`);
     const output = resolve(TEST_DIR, `${sid}_reconnect_cancel_o.txt`);
@@ -958,13 +970,25 @@ describe("broker turn multiplexing", () => {
       threadId: running.threadId,
       turnId: running.turnId,
     });
-    await sleep(50);
     const portPath = resolve(home, ".claude", "tmp", "broker.port");
     const portData = readFileSync(portPath, "utf8");
     rmSync(portPath, { force: true });
+
+    const reconnectDeadline = Date.now() + 5_000;
+    let reconnecting;
+    while (Date.now() < reconnectDeadline) {
+      await sleep(50);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], { broker: true, home });
+      reconnecting = JSON.parse(status.stdout);
+      if (reconnecting.reconnectAttemptCount >= 2) break;
+    }
+
     writeFileSync(resolve(TEST_DIR, `${sid}_cancel`), new Date().toISOString(), "utf8");
-    await sleep(700);
     writeFileSync(portPath, portData, "utf8");
+    assert.ok(
+      reconnecting?.reconnectAttemptCount >= 2,
+      `worker did not expose a failed reconnect attempt: ${JSON.stringify(reconnecting)}`,
+    );
 
     const terminalDeadline = Date.now() + 10_000;
     let terminal;
@@ -986,12 +1010,7 @@ describe("broker turn multiplexing", () => {
   it("close gracefully interrupts an active Windows worker", async (t) => {
     const home = resolve(TEST_DIR, `close_home_${Date.now()}`);
     mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
-    t.after(() => {
-      const port = readJson(resolve(home, ".claude", "tmp", "broker.port"));
-      if (port?.pid) {
-        try { process.kill(port.pid, "SIGTERM"); } catch { /* already stopped */ }
-      }
-    });
+    t.after(async () => stopBroker(home));
     const sid = newSid();
     const prompt = resolve(TEST_DIR, `${sid}_close_p.txt`);
     const output = resolve(TEST_DIR, `${sid}_close_o.txt`);
@@ -1130,7 +1149,6 @@ describe("upstream timeout interruption", () => {
 describe("model payload consistency", () => {
   const MODEL_BROKER_HOME = resolve(TEST_DIR, "model_broker_home");
   const MODEL_BROKER_TMP = resolve(MODEL_BROKER_HOME, ".claude", "tmp");
-  const MODEL_BROKER_PORT_FILE = resolve(MODEL_BROKER_TMP, "broker.port");
   const MODEL_BROKER_REQUEST_LOG = resolve(TEST_DIR, "model_broker_requests.jsonl");
 
   before(() => {
@@ -1138,13 +1156,7 @@ describe("model payload consistency", () => {
     rmSync(MODEL_BROKER_REQUEST_LOG, { force: true });
   });
 
-  after(() => {
-    if (!existsSync(MODEL_BROKER_PORT_FILE)) return;
-    try {
-      const data = readJson(MODEL_BROKER_PORT_FILE);
-      if (data?.pid) process.kill(data.pid, "SIGTERM");
-    } catch { /* already stopped */ }
-  });
+  after(async () => stopBroker(MODEL_BROKER_HOME));
 
   const cases = [
     { name: "wrapper default", args: [], opts: {}, expected: "gpt-5.6-terra" },

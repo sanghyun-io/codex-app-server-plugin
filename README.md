@@ -30,7 +30,7 @@ The wrapper manages thread lifecycle via three commands:
 - `follow-up` — resume thread + next turn (incremental diff only)
 - `close` — clean up session state
 
-By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s), reuses a single auth check, and safely multiplexes concurrent turns by `threadId`/`turnId`. During an active turn the wrapper sends a 5-second heartbeat; after two missed replies it reconnects and reattaches to the broker's output snapshot without replaying the prompt. The broker auto-starts on first use and idles out after 10 minutes. `SessionEnd` cancels only workers owned by that Claude session and leaves the shared broker available to other sessions. Set `CODEX_REVIEW_NO_BROKER=1` to bypass it.
+By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s), reuses a single auth check, and safely multiplexes concurrent turns by `threadId`/`turnId`. During an active turn the wrapper sends a 5-second heartbeat; after two missed replies it reconnects and reattaches to the broker's output snapshot without replaying the prompt. The broker auto-starts on first use and idles out after 10 minutes. `SessionEnd` cancels only workers owned by that Claude session, verifies each live process against its nonce before signalling, and uses bounded escalation while leaving the shared broker available to other sessions. Set `CODEX_REVIEW_NO_BROKER=1` to bypass it.
 
 Each session is bound to the canonical Git project root and sends that same `cwd` to both `thread/start` and `turn/start`. Follow-ups from another project fail before reaching Codex. Progress JSON exposes connection/validation/thread/first-output/streaming phases plus prompt size, first-output latency, received characters, protocol IDs, and reconnect count. Prompts over 131,072 characters are preserved intact and receive a latency warning only.
 
@@ -108,7 +108,7 @@ The runtime + universal workflows. Installs CLI binary, broker, hook scripts, sc
 |-------|--------|---------|
 | `Setup` | `scripts/install.sh` | Copies bin/schemas/rules into `~/.claude/`, manages CLAUDE.md marker block |
 | `SessionStart` | `session-lifecycle.mjs start` | Exports session metadata for worker coordination |
-| `SessionEnd` | `session-lifecycle.mjs end` | Cancels only workers owned by the ending Claude session; the shared broker exits on idle timeout |
+| `SessionEnd` | `session-lifecycle.mjs end` | Marker-first cancellation for workers owned by the ending session, followed by nonce-verified bounded escalation; the shared broker exits on idle timeout |
 | `Stop` | `stop-gate.mjs` | Blocks session stop when reviews are in flight or unreviewed changes exist |
 
 ### Skills

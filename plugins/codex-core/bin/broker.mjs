@@ -34,7 +34,7 @@
  * Lifecycle:
  *   - Starts on first worker connection (via ensureBroker() in codex-review.mjs)
  *   - Auto-shuts down after IDLE_TIMEOUT_MS of no active connections
- *   - Killed by SessionEnd hook (session-lifecycle.mjs)
+ *   - Owns its idle shutdown; SessionEnd never terminates the shared broker
  *
  * Port file: ~/.claude/tmp/broker.port
  *   { "port": N, "pid": N, "startedAt": "ISO", "serverInfo": {...} }
@@ -215,7 +215,7 @@ class AppServerConnection {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review_broker", title: "Codex Review Broker", version: "2.5.0" },
+      clientInfo: { name: "codex_review_broker", title: "Codex Review Broker", version: "2.5.1" },
     });
     this.notify("initialized");
     this.serverInfo = result?.serverInfo || {};

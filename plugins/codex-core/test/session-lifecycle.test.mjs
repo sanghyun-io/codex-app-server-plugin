@@ -23,7 +23,7 @@ function makeHome() {
   return home;
 }
 
-function runHook(event, { home, envFile, input = {} }) {
+function runHook(event, { home, envFile, input = {}, env = {} }) {
   return execFileSync(process.execPath, [LIFECYCLE, event], {
     env: {
       ...process.env,
@@ -31,6 +31,7 @@ function runHook(event, { home, envFile, input = {} }) {
       USERPROFILE: home,
       CLAUDE_SESSION_ID: "",
       CLAUDE_ENV_FILE: envFile || "",
+      ...env,
     },
     input: JSON.stringify(input),
     encoding: "utf8",
@@ -43,8 +44,8 @@ function tmp(home, name) {
   return resolve(home, ".claude", "tmp", name);
 }
 
-function spawnSleeper() {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+function spawnSleeper(nonce = "") {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", nonce], {
     stdio: "ignore",
     windowsHide: true,
   });
@@ -52,7 +53,7 @@ function spawnSleeper() {
   return child;
 }
 
-function spawnCancelAwareWorker(cancelPath, observedPath, readyPath) {
+function spawnCancelAwareWorker(cancelPath, observedPath, readyPath, nonce) {
   const script = [
     'const { existsSync, writeFileSync } = require("node:fs");',
     'process.on("SIGTERM", () => {});',
@@ -63,7 +64,7 @@ function spawnCancelAwareWorker(cancelPath, observedPath, readyPath) {
     '  process.exit(0);',
     '}, 25);',
   ].join("\n");
-  const child = spawn(process.execPath, ["-e", script], {
+  const child = spawn(process.execPath, ["-e", script, nonce], {
     env: {
       ...process.env,
       CANCEL_PATH: cancelPath,
@@ -100,12 +101,12 @@ async function waitForFile(path, timeoutMs = 3000) {
   }
 }
 
-function writePid(home, sessionName, pid, ownerSessionId) {
+function writePid(home, sessionName, pid, ownerSessionId, nonce = `nonce-${sessionName}`) {
   writeFileSync(
     tmp(home, `${sessionName}_pid`),
     JSON.stringify({
       pid,
-      nonce: `nonce-${sessionName}`,
+      nonce,
       ...(ownerSessionId ? { ownerSessionId } : {}),
     }),
     "utf8",
@@ -154,16 +155,19 @@ describe("session lifecycle hook", () => {
 
   it("ends only workers owned by the ending Claude session", async () => {
     const home = makeHome();
+    const ownedNonce = "nonce-rr_owned";
+    const foreignNonce = "nonce-rr_foreign";
     const observedPath = tmp(home, "rr_owned_cancel_observed");
     const readyPath = tmp(home, "rr_owned_ready");
     const owned = spawnCancelAwareWorker(
       tmp(home, "rr_owned_cancel"),
       observedPath,
       readyPath,
+      ownedNonce,
     );
-    const foreign = spawnSleeper();
-    writePid(home, "rr_owned", owned.pid, "claude-A");
-    writePid(home, "rr_foreign", foreign.pid, "claude-B");
+    const foreign = spawnSleeper(foreignNonce);
+    writePid(home, "rr_owned", owned.pid, "claude-A", ownedNonce);
+    writePid(home, "rr_foreign", foreign.pid, "claude-B", foreignNonce);
     await waitForFile(readyPath);
     assert.ok(existsSync(readyPath), "owned worker should be ready");
 
@@ -176,6 +180,57 @@ describe("session lifecycle hook", () => {
     assert.ok(existsSync(tmp(home, "rr_owned_cancel")));
     assert.ok(existsSync(tmp(home, "rr_owned_pid")));
     assert.ok(existsSync(tmp(home, "rr_foreign_pid")));
+  });
+
+  it("force-terminates an owned worker after the graceful cancellation bound", async () => {
+    const home = makeHome();
+    const nonce = "nonce-rr_stubborn";
+    const worker = spawnSleeper(nonce);
+    writePid(home, "rr_stubborn", worker.pid, "claude-A", nonce);
+
+    runHook("end", {
+      home,
+      input: { session_id: "claude-A" },
+      env: { CODEX_REVIEW_SESSION_END_GRACE_MS: "150" },
+    });
+
+    await waitForExit(worker.pid);
+    assert.equal(isAlive(worker.pid), false, "verified owned worker should be force-terminated");
+    assert.ok(existsSync(tmp(home, "rr_stubborn_cancel")));
+  });
+
+  it("does not signal an owned PID when its nonce does not match", () => {
+    const home = makeHome();
+    const worker = spawnSleeper("actual-worker-nonce");
+    writePid(home, "rr_reused", worker.pid, "claude-A", "stale-record-nonce");
+
+    runHook("end", {
+      home,
+      input: { session_id: "claude-A" },
+      env: { CODEX_REVIEW_SESSION_END_GRACE_MS: "150" },
+    });
+
+    assert.equal(isAlive(worker.pid), true, "nonce mismatch must be treated as possible PID reuse");
+    assert.ok(existsSync(tmp(home, "rr_reused_cancel")));
+  });
+
+  it("does not signal an owned PID when its nonce is missing", () => {
+    const home = makeHome();
+    const worker = spawnSleeper("actual-worker-nonce");
+    writeFileSync(
+      tmp(home, "rr_missing_nonce_pid"),
+      JSON.stringify({ pid: worker.pid, ownerSessionId: "claude-A" }),
+      "utf8",
+    );
+
+    runHook("end", {
+      home,
+      input: { session_id: "claude-A" },
+      env: { CODEX_REVIEW_SESSION_END_GRACE_MS: "150" },
+    });
+
+    assert.equal(isAlive(worker.pid), true, "missing nonce must fail closed");
+    assert.ok(existsSync(tmp(home, "rr_missing_nonce_cancel")));
   });
 
   it("preserves the shared broker and unowned legacy workers", () => {
