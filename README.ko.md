@@ -30,7 +30,7 @@ Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
 - `follow-up` — thread resume + 다음 turn (증분 diff만 전송)
 - `close` — 세션 상태 정리
 
-기본적으로 워커는 **영속 broker**(`broker.mjs`)를 통해 연결됩니다. broker는 localhost TCP 포트에서 단일 warm `codex app-server` subprocess를 유지해 turn마다 발생하는 spawn 오버헤드(~2–3s)를 제거하고, auth 체크를 재사용하며, 동시 turn을 `threadId`/`turnId`로 안전하게 분리합니다. 실행 중에는 5초 heartbeat를 보내고 2회 연속 응답이 없으면 재접속하여 broker 출력 스냅샷에 재부착하므로 프롬프트를 재전송하지 않습니다. broker는 첫 사용 시 자동 시작되고 10분 idle 후 종료됩니다. `SessionEnd`는 해당 Claude 세션 소유 워커만 취소하며 다른 세션이 공유 broker를 계속 사용할 수 있게 유지합니다. `CODEX_REVIEW_NO_BROKER=1`로 우회할 수 있습니다.
+기본적으로 워커는 **영속 broker**(`broker.mjs`)를 통해 연결됩니다. broker는 localhost TCP 포트에서 단일 warm `codex app-server` subprocess를 유지해 turn마다 발생하는 spawn 오버헤드(~2–3초)를 제거하고, auth 체크를 재사용하며, 동시 turn을 `threadId`/`turnId`로 안전하게 분리합니다. 실행 중에는 5초 heartbeat를 보내고 2회 연속 응답이 없으면 재접속하여 broker 출력 스냅샷에 재부착하므로 프롬프트를 재전송하지 않습니다. broker는 첫 사용 시 자동 시작되고 10분 idle 후 종료됩니다. `SessionEnd`는 해당 Claude 세션 소유 워커만 취소하며 다른 세션이 공유 broker를 계속 사용할 수 있게 유지합니다. `CODEX_REVIEW_NO_BROKER=1`로 우회할 수 있습니다.
 
 각 세션은 canonical Git 프로젝트 루트에 고정되며 동일한 `cwd`가 `thread/start`와 `turn/start`에 전달됩니다. 다른 프로젝트에서 follow-up하면 Codex 호출 전에 실패합니다. progress JSON에는 연결/모델 검증/thread 시작/최초 출력 대기/스트리밍 단계와 프롬프트 크기, 최초 출력 지연, 수신 글자 수, protocol ID, 재접속 횟수가 기록됩니다. 131,072자를 초과하는 프롬프트는 자르지 않고 그대로 전달하며 지연 경고만 남깁니다.
 
