@@ -498,18 +498,25 @@ class BrokerClient {
     return new Promise((resolveP, rejectP) => {
       let settled = false;
       this.disconnectNotified = false;
-      this.socket = createConnection({ host: "127.0.0.1", port }, () => {
+      const socket = createConnection({ host: "127.0.0.1", port }, () => {
+        if (this.socket !== socket) return;
         settled = true;
         this.connectionActive = true;
-        this.rl = createInterface({ input: this.socket });
-        this.rl.on("line", (line) => {
+        const rl = createInterface({ input: socket });
+        this.rl = rl;
+        rl.on("line", (line) => {
           let msg;
           try { msg = JSON.parse(line); } catch { return; }
           this._handleMessage(msg);
         });
+        rl.on("error", (error) => {
+          if (this.rl === rl && this.socket === socket) this._handleDisconnect(error);
+        });
         resolveP();
       });
-      this.socket.on("error", (err) => {
+      this.socket = socket;
+      socket.on("error", (err) => {
+        if (this.socket !== socket) return;
         if (!settled) {
           settled = true;
           rejectP(new Error(`Broker connection failed: ${err.message}`));
@@ -518,7 +525,8 @@ class BrokerClient {
         }
       });
 
-      this.socket.on("close", () => {
+      socket.on("close", () => {
+        if (this.socket !== socket) return;
         if (this.connectionActive) this._handleDisconnect(new Error("Broker connection closed"));
       });
     });
