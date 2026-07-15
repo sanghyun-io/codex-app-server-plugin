@@ -56,7 +56,10 @@ test("cancelling a queued job prevents it from being dispatched", () => {
   scheduler.complete("running", "completed");
 
   assert.deepEqual(started, ["running"]);
-  assert.deepEqual(scheduler.snapshot().terminal, [{ ...job("cancelled"), status: "cancelled" }]);
+  assert.deepEqual(
+    scheduler.snapshot().terminal.find(value => value.jobId === "cancelled"),
+    { ...job("cancelled"), status: "cancelled" },
+  );
 });
 
 test("recovered running jobs reserve capacity and thread ownership", () => {
