@@ -48,6 +48,8 @@ const DEFAULT_MODEL = "gpt-5.6-terra";
 const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
+const PROGRESS_RENAME_RETRY_DELAYS_MS = [10, 25, 50];
+const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 const CANCEL_CHECK_MS = 500;               // 500ms cancel signal polling
 const INTERRUPT_GRACE_MS = Math.max(
   50,
@@ -1004,8 +1006,25 @@ function writeJson(path, data) {
 /** Atomic write: write to tmp file then rename into place. */
 function writeJsonAtomic(path, data) {
   const tmp = path + ".tmp." + process.pid;
-  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  renameSync(tmp, path);
+  let renamed = false;
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        renameSync(tmp, path);
+        renamed = true;
+        return;
+      } catch (error) {
+        const delayMs = PROGRESS_RENAME_RETRY_DELAYS_MS[attempt];
+        if (!RETRYABLE_RENAME_CODES.has(error?.code) || delayMs === undefined) {
+          throw error;
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      }
+    }
+  } finally {
+    if (!renamed) removeFile(tmp);
+  }
 }
 
 function removeFile(path) {
@@ -1016,7 +1035,15 @@ function loadState(dir, sid) { return readJson(fp.state(dir, sid)); }
 function saveState(dir, sid, data) { writeJson(fp.state(dir, sid), data); }
 
 function loadProgress(dir, sid) { return readJson(fp.progress(dir, sid)); }
-function saveProgress(dir, sid, data) { writeJsonAtomic(fp.progress(dir, sid), data); }
+function saveProgress(dir, sid, data) {
+  try {
+    writeJsonAtomic(fp.progress(dir, sid), data);
+    return true;
+  } catch (error) {
+    log(`Progress update skipped: ${error?.message || error}`);
+    return false;
+  }
+}
 
 /**
  * PID file stores JSON: { pid, nonce, ownerSessionId? } for identity verification
