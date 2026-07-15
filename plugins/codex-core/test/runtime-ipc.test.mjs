@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createConnection } from "node:net";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   acquireStartupLock,
@@ -12,6 +14,9 @@ import {
   requestRuntime,
   runtimePaths,
 } from "../bin/lib/runtime-ipc.mjs";
+
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+const SUPERVISOR = resolve(TEST_DIR, "../bin/supervisor.mjs");
 
 function tempRuntime() {
   return mkdtempSync(join(tmpdir(), "codex-v3-ipc-"));
@@ -22,6 +27,15 @@ function openClient(endpoint) {
     const socket = createConnection(endpoint, () => resolve(socket));
     socket.once("error", reject);
   });
+}
+
+async function waitUntil(predicate, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 25));
+  }
+  throw new Error("condition was not satisfied before timeout");
 }
 
 test("runtimePaths creates a platform-local IPC endpoint", () => {
@@ -85,7 +99,7 @@ test("malformed frames and reset clients do not crash the runtime server", async
   malformed.end('{"broken\n');
   const reset = await openClient(server.endpoint);
   reset.write('{"partial":true');
-  reset.resetAndDestroy();
+  reset.destroy();
   await new Promise(resolve => setTimeout(resolve, 50));
 
   assert.deepEqual(
@@ -108,10 +122,30 @@ test("only one caller owns the supervisor startup lock", () => {
 test("a stale startup lock can be replaced", () => {
   const runtimeDir = tempRuntime();
   const paths = runtimePaths(runtimeDir);
+  mkdirSync(paths.supervisorDir, { recursive: true });
   writeFileSync(paths.lockFile, JSON.stringify({ pid: 99999999, nonce: "stale" }), "utf8");
 
   const lock = acquireStartupLock(runtimeDir, { nonce: "fresh", pid: process.pid });
 
   assert.equal(lock.acquired, true);
   assert.equal(releaseStartupLock(runtimeDir, "fresh"), true);
+});
+
+test("the supervisor publishes a health endpoint and shuts down while idle", async t => {
+  const runtimeDir = tempRuntime();
+  const child = spawn(process.execPath, [SUPERVISOR, "--runtime", runtimeDir], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  t.after(() => {
+    if (child.exitCode === null) child.kill();
+  });
+  await waitUntil(() => existsSync(runtimePaths(runtimeDir).endpointFile));
+
+  const health = await requestRuntime("ping", {}, { runtimeDir });
+  assert.equal(health.schemaVersion, 3);
+  assert.equal(health.pid, child.pid);
+
+  assert.deepEqual(await requestRuntime("shutdown-if-idle", {}, { runtimeDir }), { shuttingDown: true });
+  await waitUntil(() => child.exitCode !== null);
 });
