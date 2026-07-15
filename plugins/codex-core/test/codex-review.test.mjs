@@ -34,6 +34,7 @@ function cli(args, opts = {}) {
     : { ...process.env };
   const env = {
     ...baseEnv,
+    CODEX_REVIEW_V2: "1",
     CODEX_BINARY: FAKE_CODEX,
     CODEX_REVIEW_MODEL: opts.envModel ?? "",
     FAKE_TURN_DELAY_MS: String(opts.turnDelay ?? 100),

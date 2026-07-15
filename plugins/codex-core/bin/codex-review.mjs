@@ -39,6 +39,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { resolveProjectRoot, sameProject } from "./lib/project-scope.mjs";
+import { ensureSupervisor, requestRuntime } from "./lib/runtime-ipc.mjs";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -70,6 +71,10 @@ const ACTIVE_PROGRESS_STATUSES = new Set([
 ]);
 
 const SELF = fileURLToPath(import.meta.url);
+const V3_RUNTIME_DIR = resolve(
+  process.env.CODEX_REVIEW_RUNTIME_DIR
+    || resolve(process.env.HOME || process.env.USERPROFILE || "", ".claude", "codex-runtime", "v3"),
+);
 
 // ---------------------------------------------------------------------------
 // Codex binary resolution
@@ -1887,6 +1892,115 @@ function cmdScope(parsed) {
 }
 
 // ---------------------------------------------------------------------------
+// V3 durable runtime commands
+// ---------------------------------------------------------------------------
+
+function usesV3Runtime(parsed) {
+  return process.env.CODEX_REVIEW_V2 !== "1"
+    && !parsed.foreground
+    && !parsed.isWorker
+    && ["start", "follow-up", "status", "cancel", "close"].includes(parsed.command);
+}
+
+async function prepareV3Prompt(parsed) {
+  if (parsed.positional.length < 2) {
+    throw new CodexError(6, `${parsed.command} requires <prompt-file> <output-file>`);
+  }
+  const promptPath = resolve(parsed.positional[0]);
+  if (parsed.stdin) {
+    const prompt = await readStdin();
+    if (!prompt.trim()) throw new CodexError(6, "Empty prompt received from stdin");
+    mkdirSync(dirname(promptPath), { recursive: true });
+    writeFileSync(promptPath, prompt, "utf8");
+  }
+  if (!existsSync(promptPath)) throw new CodexError(6, `Prompt file not found: ${promptPath}`);
+  return { promptPath, prompt: readFileSync(promptPath, "utf8") };
+}
+
+async function v3StartOrFollowUp(parsed) {
+  const { prompt } = await prepareV3Prompt(parsed);
+  mkdirSync(parsed.reviewDir, { recursive: true });
+  await ensureSupervisor({ runtimeDir: V3_RUNTIME_DIR });
+  const state = await requestRuntime("submit", {
+    command: parsed.command,
+    sessionId: parsed.sessionId,
+    prompt,
+    outputPath: resolve(parsed.positional[1]),
+    model: parsed.model,
+    effort: "high",
+    timeoutMs: parsed.timeout,
+    projectRoot: parsed.projectRoot,
+    ownerSessionId: process.env.CODEX_REVIEW_OWNER_SESSION || null,
+    reviewDir: parsed.reviewDir,
+  }, { runtimeDir: V3_RUNTIME_DIR });
+  log(`V3 job queued: ${state.jobId}`);
+}
+
+function exitForV3Status(state) {
+  switch (state.status) {
+    case "completed": return 0;
+    case "queued":
+    case "starting":
+    case "running":
+    case "recovering": return 7;
+    case "cancelled": return 8;
+    case "failed": return state.exitCode || 6;
+    default: return 6;
+  }
+}
+
+async function v3Status(parsed) {
+  await ensureSupervisor({ runtimeDir: V3_RUNTIME_DIR });
+  const state = await requestRuntime("status", { sessionId: parsed.sessionId }, { runtimeDir: V3_RUNTIME_DIR });
+  const publicState = {
+    ...state,
+    schemaVersion: 3,
+    updatedAt: state.at || state.completedAt || state.createdAt,
+    elapsedMs: Date.now() - new Date(state.createdAt).getTime(),
+    outputFile: state.outputPath,
+    pidAlive: ACTIVE_PROGRESS_STATUSES.has(state.status) ? isAlive(Number(state.pid)) : false,
+  };
+  console.log(JSON.stringify(publicState, null, 2));
+  process.exit(exitForV3Status(publicState));
+}
+
+async function v3Cancel(parsed) {
+  await ensureSupervisor({ runtimeDir: V3_RUNTIME_DIR });
+  const state = await requestRuntime("cancel", { sessionId: parsed.sessionId }, { runtimeDir: V3_RUNTIME_DIR });
+  log(`V3 job ${state.jobId} cancellation ${state.cancelRequested ? "requested" : state.status}`);
+}
+
+async function v3Close(parsed) {
+  await ensureSupervisor({ runtimeDir: V3_RUNTIME_DIR });
+  try {
+    const state = await requestRuntime("status", { sessionId: parsed.sessionId }, { runtimeDir: V3_RUNTIME_DIR });
+    if (!["completed", "cancelled", "failed"].includes(state.status)) {
+      await requestRuntime("cancel", { jobId: state.jobId }, { runtimeDir: V3_RUNTIME_DIR });
+    }
+  } catch (error) {
+    if (error?.code !== "JOB_NOT_FOUND") throw error;
+  }
+  log(`Session ${parsed.sessionId} closed.`);
+}
+
+async function runV3Command(parsed) {
+  try {
+    switch (parsed.command) {
+      case "start":
+      case "follow-up": return await v3StartOrFollowUp(parsed);
+      case "status": return await v3Status(parsed);
+      case "cancel": return await v3Cancel(parsed);
+      case "close": return await v3Close(parsed);
+      default: return undefined;
+    }
+  } catch (error) {
+    if (error?.code === "THREAD_NOT_READY") throw new CodexError(4, error.message);
+    if (error?.code === "JOB_NOT_FOUND") throw new CodexError(6, `No session found: ${parsed.sessionId}`);
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLI parsing
 // ---------------------------------------------------------------------------
 
@@ -2035,6 +2149,20 @@ async function main() {
   // Worker mode — run the actual Codex interaction
   if (parsed.isWorker) {
     await workerMain(parsed);
+    return;
+  }
+
+  if (usesV3Runtime(parsed)) {
+    try {
+      await runV3Command(parsed);
+    } catch (err) {
+      if (err instanceof CodexError) {
+        log(`ERROR (exit ${err.exitCode}): ${err.message}`);
+        process.exit(err.exitCode);
+      }
+      log(`UNEXPECTED ERROR: ${err.message}`);
+      process.exit(6);
+    }
     return;
   }
 

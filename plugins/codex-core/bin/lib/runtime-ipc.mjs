@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -12,6 +13,7 @@ import {
 import { createConnection, createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 
@@ -248,4 +250,33 @@ export function requestRuntime(action, params = {}, options = {}) {
       if (!settled && !hadError) finish(new Error("Runtime connection closed before a response"));
     });
   });
+}
+
+export async function ensureSupervisor(options = {}) {
+  const runtimeDir = options.runtimeDir;
+  try {
+    return await requestRuntime("ping", {}, { runtimeDir, timeoutMs: 500 });
+  } catch { /* start or replace the runtime */ }
+
+  const defaultSupervisor = resolve(dirname(fileURLToPath(import.meta.url)), "..", "supervisor.mjs");
+  const supervisorPath = options.supervisorPath || defaultSupervisor;
+  const child = spawn(process.execPath, [supervisorPath, "--runtime", runtimeDir], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    env: options.env || process.env,
+  });
+  child.unref();
+
+  const deadline = Date.now() + (options.timeoutMs || 5_000);
+  let lastError = null;
+  while (Date.now() < deadline) {
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 50));
+    try {
+      return await requestRuntime("ping", {}, { runtimeDir, timeoutMs: 500 });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Supervisor did not become ready");
 }
