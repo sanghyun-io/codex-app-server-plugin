@@ -43,7 +43,10 @@ async function waitUntil(read, predicate, timeoutMs = 10_000) {
 }
 
 async function ready(runtimeDir) {
-  await waitUntil(async () => existsSync(runtimePaths(runtimeDir).endpointFile), Boolean);
+  await waitUntil(async () => {
+    if (!existsSync(runtimePaths(runtimeDir).endpointFile)) return null;
+    return requestRuntime("ping", {}, { runtimeDir });
+  }, value => value?.schemaVersion === 3);
 }
 
 function request(sessionId, outputPath) {
@@ -96,8 +99,9 @@ test("a worker continues while the supervisor is replaced", async t => {
     value => value?.status === "running",
   );
 
-  supervisor.kill();
-  await waitUntil(async () => supervisor.exitCode !== null, Boolean);
+  const exited = new Promise(resolvePromise => supervisor.once("exit", resolvePromise));
+  supervisor.kill("SIGKILL");
+  await exited;
   supervisor = launch(runtimeDir);
   await ready(runtimeDir);
 
@@ -107,4 +111,37 @@ test("a worker continues while the supervisor is replaced", async t => {
   );
   assert.equal(terminal.generation, 1);
   assert.equal(readFileSync(outputPath, "utf8"), "survived supervisor replacement");
+});
+
+test("a durable cancel request survives supervisor replacement", async t => {
+  const runtimeDir = tempRuntime();
+  const outputPath = join(runtimeDir, "cancelled.txt");
+  let supervisor = launch(runtimeDir, {
+    FAKE_TURN_DELAY_MS: "5000",
+    FAKE_TURN_TEXT: "must not complete",
+  });
+  t.after(() => { if (supervisor.exitCode === null) supervisor.kill(); });
+  await ready(runtimeDir);
+  const submitted = await requestRuntime("submit", request("cancel-session", outputPath), { runtimeDir });
+  const running = await waitUntil(
+    () => requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir }),
+    value => value?.status === "running",
+  );
+
+  const exited = new Promise(resolvePromise => supervisor.once("exit", resolvePromise));
+  supervisor.kill("SIGKILL");
+  await exited;
+  supervisor = launch(runtimeDir, { FAKE_TURN_DELAY_MS: "5000" });
+  await ready(runtimeDir);
+
+  const cancelled = await requestRuntime("cancel", { jobId: submitted.jobId }, { runtimeDir });
+  assert.equal(cancelled.status, "cancelled");
+  await waitUntil(
+    () => requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir }),
+    value => value?.status === "cancelled",
+  );
+  await waitUntil(async () => {
+    try { process.kill(running.pid, 0); return false; } catch { return true; }
+  }, Boolean);
+  assert.equal(existsSync(outputPath), false);
 });
