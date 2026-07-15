@@ -709,7 +709,7 @@ describe("broker turn multiplexing", () => {
           broker: true,
           home: BROKER_HOME,
           tagThread: true,
-          turnDelay: 900,
+          turnDelay: 1500,
           turnText: `Content ${s.idx}.\n\n[VERDICT] - APPROVE`,
         }
       );
@@ -732,9 +732,10 @@ describe("broker turn multiplexing", () => {
     const unique = new Set(tags);
     assert.equal(unique.size, tags.length, `concurrent sessions leaked: ${tags}`);
     const elapsedMs = Date.now() - startedAt;
-    // Three serialized 900ms turns take at least 2700ms before startup and
-    // polling overhead. Keep that boundary while allowing Windows CI jitter.
-    assert.ok(elapsedMs < 2700, `turns were serialized: ${elapsedMs}ms`);
+    // Three serialized 1500ms turns take at least 4500ms before startup and
+    // polling overhead. The larger signal preserves that boundary while
+    // leaving enough separation for Windows process and polling jitter.
+    assert.ok(elapsedMs < 4500, `turns were serialized: ${elapsedMs}ms`);
   });
 
   it("direct mode ignores notifications for a foreign thread and turn", () => {
