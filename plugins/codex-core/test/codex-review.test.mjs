@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, realpathSync,
+  readdirSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(__dirname, "../bin/codex-review.mjs");
 const FAKE_DIR = __dirname;
 const FAKE_CODEX = resolve(FAKE_DIR, "fake-codex.mjs");
+const FAULT_INJECTOR = resolve(FAKE_DIR, "fault-inject.cjs");
 const TEST_DIR = resolve(__dirname, ".test-tmp");
 
 let sessionCounter = 0;
@@ -51,6 +53,17 @@ function cli(args, opts = {}) {
     CODEX_REVIEW_HEARTBEAT_MS: opts.heartbeatMs ? String(opts.heartbeatMs) : "",
     CODEX_REVIEW_INTERRUPT_GRACE_MS: opts.interruptGrace ? String(opts.interruptGrace) : "",
     CODEX_REVIEW_OWNER_SESSION: opts.ownerSession ?? "",
+    CODEX_TEST_PROGRESS_RENAME_FAILURES: opts.progressRenameFailures !== undefined
+      ? String(opts.progressRenameFailures)
+      : "",
+    CODEX_TEST_READLINE_ERROR_SIGNAL: opts.readlineErrorSignal ?? "",
+    ...(opts.progressRenameFailures !== undefined || opts.readlineErrorSignal
+      ? {
+          NODE_OPTIONS: [baseEnv.NODE_OPTIONS, `--require=${FAULT_INJECTOR}`]
+            .filter(Boolean)
+            .join(" "),
+        }
+      : {}),
     ...(opts.broker ? {} : { CODEX_REVIEW_NO_BROKER: "1" }),
     ...(opts.tagThread ? { FAKE_TAG_THREAD: "1" } : {}),
     ...(opts.turnFail ? { FAKE_TURN_FAIL: opts.turnFail } : {}),
@@ -369,6 +382,32 @@ describe("background mode", () => {
     assert.ok(completed, "Should complete within 15s");
     assert.ok(existsSync(output));
     assert.ok(readFileSync(output, "utf8").includes("APPROVE"));
+  });
+
+  it("survives exhausted progress rename failures", async () => {
+    const started = cli(
+      ["start", prompt, output, "--session", sid, "--review-dir", TEST_DIR],
+      { turnDelay: 300, progressRenameFailures: 4 },
+    );
+    assert.equal(started.exit, 0, started.stderr);
+
+    let terminal;
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      await sleep(200);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR]);
+      terminal = JSON.parse(status.stdout);
+      if (status.exit !== 7) break;
+    }
+
+    assert.equal(terminal?.status, "completed");
+    assert.match(readFileSync(output, "utf8"), /APPROVE/);
+    const workerLog = readFileSync(resolve(TEST_DIR, `${sid}_worker.log`), "utf8");
+    assert.match(workerLog, /Progress update skipped:.*EPERM/);
+    assert.deepEqual(
+      readdirSync(TEST_DIR).filter(name => name.startsWith(`${sid}_progress.json.tmp.`)),
+      [],
+    );
   });
 
   it("publishes long-turn phases and latency metrics", async () => {
@@ -776,6 +815,52 @@ describe("broker turn multiplexing", () => {
     for (const marker of markers) {
       assert.equal(output.split(marker).length - 1, 1, `${marker} was duplicated or missing`);
     }
+  });
+
+  it("reconnects after a readline ECONNRESET without an unhandled error", async (t) => {
+    const home = resolve(TEST_DIR, `readline_reset_home_${Date.now()}`);
+    mkdirSync(resolve(home, ".claude", "tmp"), { recursive: true });
+    t.after(async () => stopBroker(home));
+    const sid = newSid();
+    const promptPath = resolve(TEST_DIR, `${sid}_readline_reset_p.txt`);
+    const outputPath = resolve(TEST_DIR, `${sid}_readline_reset_o.txt`);
+    const signalPath = resolve(TEST_DIR, `${sid}_readline_reset.signal`);
+    writeFileSync(promptPath, "Keep streaming after a readline reset.", "utf8");
+
+    const started = cli([
+      "start", promptPath, outputPath,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+    ], {
+      broker: true,
+      home,
+      turnDelay: 1800,
+      deltaInterval: 200,
+      turnText: "Recovered readline output.\n\n[VERDICT] - APPROVE",
+      readlineErrorSignal: signalPath,
+    });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let running;
+    const startDeadline = Date.now() + 20_000;
+    while (Date.now() < startDeadline) {
+      await sleep(50);
+      const status = cli(["status", "--session", sid, "--review-dir", TEST_DIR], {
+        broker: true,
+        home,
+      });
+      running = JSON.parse(status.stdout);
+      if (running.turnId) break;
+    }
+    assert.ok(running?.turnId, `turn id was not published: ${JSON.stringify(running)}`);
+
+    writeFileSync(signalPath, "reset", "utf8");
+    const completed = await pollToComplete(sid, 30_000, home);
+    assert.equal(completed.status, "completed");
+    assert.ok(completed.reconnectCount >= 1, `reconnect count: ${completed.reconnectCount}`);
+    assert.match(readFileSync(outputPath, "utf8"), /Recovered readline output/);
+    const workerLog = readFileSync(resolve(TEST_DIR, `${sid}_worker.log`), "utf8");
+    assert.doesNotMatch(workerLog, /Unhandled 'error' event/);
   });
 
   it("reconnects after two missed broker heartbeats", async (t) => {
