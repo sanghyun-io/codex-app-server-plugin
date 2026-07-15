@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import { AppServerClient, AppServerError } from "./lib/app-server-client.mjs";
 import {
@@ -95,7 +95,11 @@ async function main() {
 
     if (checkpointTimer) clearInterval(checkpointTimer);
     if (!existsSync(attempt.outputPath)) appendOutput(attempt.outputPath, "");
-    publishResult(paths.jobDir, attempt.outputPath);
+    const resultPath = publishResult(paths.jobDir, attempt.outputPath);
+    if (request.outputPath) {
+      mkdirSync(dirname(request.outputPath), { recursive: true });
+      copyFileSync(resultPath, request.outputPath);
+    }
     appendEvent(attempt.eventsPath, {
       type: result.status === "cancelled" ? "cancelled" : "completed",
       generation: parsed.generation,
