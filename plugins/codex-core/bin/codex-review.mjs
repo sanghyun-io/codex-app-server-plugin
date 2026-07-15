@@ -259,7 +259,7 @@ class AppServerClient {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.5.1" },
+      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.5.2" },
     });
     this.notify("initialized");
     return result;
