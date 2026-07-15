@@ -215,7 +215,7 @@ class AppServerConnection {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review_broker", title: "Codex Review Broker", version: "2.5.2" },
+      clientInfo: { name: "codex_review_broker", title: "Codex Review Broker", version: "3.0.0" },
     });
     this.notify("initialized");
     this.serverInfo = result?.serverInfo || {};

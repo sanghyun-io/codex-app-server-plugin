@@ -1,5 +1,6 @@
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -30,13 +31,14 @@ function flushFile(path) {
 }
 
 function writeImmutableJson(path, value) {
-  const fd = openSync(path, "wx");
+  const fd = openSync(path, "wx", 0o600);
   try {
     writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
+  if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
 export function readEvents(path) {
@@ -59,20 +61,21 @@ export function readEvents(path) {
 }
 
 export function appendEvent(path, event) {
-  mkdirSync(join(path, ".."), { recursive: true });
+  mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
   const previous = readEvents(path);
   const record = {
     ...event,
     seq: event.seq ?? ((previous.at(-1)?.seq || 0) + 1),
     at: event.at || new Date().toISOString(),
   };
-  const fd = openSync(path, "a");
+  const fd = openSync(path, "a", 0o600);
   try {
     writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
+  if (process.platform !== "win32") chmodSync(path, 0o600);
   return record;
 }
 
@@ -81,7 +84,8 @@ export function createJob(runtimeDir, request, options = {}) {
   const jobDir = join(runtimeDir, "jobs", jobId);
   const requestPath = join(jobDir, "request.json");
   const supervisorEventsPath = join(jobDir, "supervisor.events.jsonl");
-  mkdirSync(join(jobDir, "attempts"), { recursive: true });
+  mkdirSync(join(jobDir, "attempts"), { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") chmodSync(jobDir, 0o700);
   writeImmutableJson(requestPath, {
     ...request,
     schemaVersion: 3,
@@ -95,7 +99,8 @@ export function createJob(runtimeDir, request, options = {}) {
 export function createAttempt(jobDir, generation) {
   if (!Number.isInteger(generation) || generation < 1) throw new Error("generation must be a positive integer");
   const attemptDir = join(jobDir, "attempts", String(generation).padStart(4, "0"));
-  mkdirSync(attemptDir, { recursive: true });
+  mkdirSync(attemptDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") chmodSync(attemptDir, 0o700);
   return {
     generation,
     attemptDir,
@@ -106,7 +111,8 @@ export function createAttempt(jobDir, generation) {
 
 export function appendOutput(path, delta) {
   mkdirSync(join(path, ".."), { recursive: true });
-  appendFileSync(path, delta, "utf8");
+  appendFileSync(path, delta, { encoding: "utf8", mode: 0o600 });
+  if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
 export function publishResult(jobDir, outputPath) {

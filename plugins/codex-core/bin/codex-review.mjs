@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * codex-review v2 — Async Codex App Server wrapper with progress tracking
+ * codex-review v3 — durable multi-session Codex App Server runtime
  *
  * Commands:
  *   start      <prompt> <output> --session <SID> --review-dir <DIR>   Start a new thread + turn (background)
@@ -264,7 +264,7 @@ class AppServerClient {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review", title: "Codex Review", version: "2.5.2" },
+      clientInfo: { name: "codex_review", title: "Codex Review", version: "3.0.0" },
     });
     this.notify("initialized");
     return result;
@@ -2015,7 +2015,7 @@ async function runV3Command(parsed) {
 // ---------------------------------------------------------------------------
 
 function printHelp() {
-  console.log(`codex-review v2 — Async Codex App Server wrapper
+  console.log(`codex-review v3 — Durable multi-session Codex App Server runtime
 
 Usage:
   codex-review start      <prompt> <output> --session <SID> --review-dir <DIR> [options]

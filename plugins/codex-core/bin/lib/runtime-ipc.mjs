@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -28,14 +29,16 @@ function isProcessAlive(pid) {
 }
 
 function writeDurableJson(path, value) {
-  mkdirSync(dirname(path), { recursive: true });
-  const fd = openSync(path, "w");
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") chmodSync(dirname(path), 0o700);
+  const fd = openSync(path, "w", 0o600);
   try {
     writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
+  if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
 export function runtimePaths(runtimeDir) {
@@ -56,7 +59,8 @@ export function runtimePaths(runtimeDir) {
 
 export function acquireStartupLock(runtimeDir, identity = {}) {
   const paths = runtimePaths(runtimeDir);
-  mkdirSync(paths.supervisorDir, { recursive: true });
+  mkdirSync(paths.supervisorDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") chmodSync(paths.supervisorDir, 0o700);
   const record = {
     pid: identity.pid || process.pid,
     nonce: identity.nonce || randomBytes(12).toString("hex"),
@@ -65,7 +69,7 @@ export function acquireStartupLock(runtimeDir, identity = {}) {
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const fd = openSync(paths.lockFile, "wx");
+      const fd = openSync(paths.lockFile, "wx", 0o600);
       try {
         writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
         fsyncSync(fd);
@@ -117,7 +121,8 @@ export async function createRuntimeServer(options) {
   const { runtimeDir, onRequest } = options;
   const token = options.token || randomBytes(32).toString("hex");
   const paths = runtimePaths(runtimeDir);
-  mkdirSync(paths.supervisorDir, { recursive: true });
+  mkdirSync(paths.supervisorDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") chmodSync(paths.supervisorDir, 0o700);
   if (process.platform !== "win32" && existsSync(paths.endpoint)) {
     try { unlinkSync(paths.endpoint); } catch { /* listen reports a useful error */ }
   }
