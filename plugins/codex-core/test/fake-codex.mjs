@@ -18,7 +18,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 const TURN_DELAY = parseInt(process.env.FAKE_TURN_DELAY_MS || "200", 10);
 const TURN_TEXT = process.env.FAKE_TURN_TEXT || "Fake review output for testing.\n\n[VERDICT] - APPROVE";
@@ -33,6 +33,7 @@ const INTERRUPT_LOG = process.env.FAKE_INTERRUPT_LOG || "";
 const INTERRUPT_DELAY_MS = parseInt(process.env.FAKE_INTERRUPT_DELAY_MS || "0", 10);
 const FOREIGN_DELTA = !!process.env.FAKE_FOREIGN_DELTA;
 const EXIT_AFTER_FIRST_DELTA = !!process.env.FAKE_EXIT_AFTER_FIRST_DELTA;
+const EXIT_ONCE_FILE = process.env.FAKE_EXIT_ONCE_FILE || "";
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -187,7 +188,9 @@ function handleRequest(msg) {
               params: { threadId, turnId, itemId: `item-${turnId}`, delta: chunk },
             });
             sentDeltas += 1;
-            if (EXIT_AFTER_FIRST_DELTA && sentDeltas === 1) {
+            const shouldExitOnce = EXIT_ONCE_FILE && !existsSync(EXIT_ONCE_FILE);
+            if (sentDeltas === 1 && (EXIT_AFTER_FIRST_DELTA || shouldExitOnce)) {
+              if (shouldExitOnce) writeFileSync(EXIT_ONCE_FILE, "exited\n", "utf8");
               setTimeout(() => process.exit(42), 10);
             }
           }, delay);

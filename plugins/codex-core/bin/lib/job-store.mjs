@@ -169,5 +169,6 @@ export function jobPaths(runtimeDir, jobId) {
     requestPath: join(jobDir, "request.json"),
     supervisorEventsPath: join(jobDir, "supervisor.events.jsonl"),
     resultPath: join(jobDir, "result.txt"),
+    cancelPath: join(jobDir, "cancel.requested"),
   };
 }

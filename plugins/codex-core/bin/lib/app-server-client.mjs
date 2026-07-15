@@ -7,10 +7,11 @@ import { createInterface } from "node:readline";
 const INIT_TIMEOUT_MS = 30_000;
 
 export class AppServerError extends Error {
-  constructor(exitCode, message, details = null) {
+  constructor(exitCode, message, details = null, retryable = false) {
     super(message);
     this.exitCode = exitCode;
     this.details = details;
+    this.retryable = retryable;
   }
 }
 
@@ -74,7 +75,7 @@ export class AppServerClient {
         if (this.proc !== proc || this.generation !== generation) return;
         const wrapped = error?.code === "ENOENT"
           ? new AppServerError(1, "codex binary not found. Install Codex or run /codex-core:setup.")
-          : new AppServerError(6, `Process spawn error: ${error.message}`);
+          : new AppServerError(6, `Process spawn error: ${error.message}`, null, true);
         if (!settled) {
           settled = true;
           rejectPromise(wrapped);
@@ -83,7 +84,7 @@ export class AppServerClient {
       });
       proc.on("exit", (code, signal) => {
         if (this.proc !== proc || this.generation !== generation) return;
-        this.#disconnect(new AppServerError(6, `App server exited (code ${code ?? "unknown"}${signal ? `, signal ${signal}` : ""})`), generation);
+        this.#disconnect(new AppServerError(6, `App server exited (code ${code ?? "unknown"}${signal ? `, signal ${signal}` : ""})`, null, true), generation);
       });
 
       const rl = createInterface({ input: proc.stdout });
@@ -96,7 +97,7 @@ export class AppServerClient {
       });
       rl.on("error", error => {
         if (this.rl === rl && this.generation === generation) {
-          this.#disconnect(new AppServerError(6, error?.message || String(error)), generation);
+          this.#disconnect(new AppServerError(6, error?.message || String(error), null, true), generation);
         }
       });
     });
@@ -215,8 +216,10 @@ export class AppServerClient {
       let settled = false;
       let turnId = null;
       let text = "";
+      let interruptSent = false;
       const cleanup = () => {
         clearTimeout(timer);
+        clearInterval(cancelTimer);
         removeDelta();
         removeCompleted();
         removeError();
@@ -249,6 +252,11 @@ export class AppServerClient {
       });
       const removeDisconnect = this.onDisconnect(error => finish(error));
       const timer = setTimeout(() => finish(new AppServerError(5, `Turn timed out after ${timeoutMs}ms`)), timeoutMs);
+      const cancelTimer = setInterval(() => {
+        if (!options.cancelSignal?.() || !turnId || interruptSent || settled) return;
+        interruptSent = true;
+        this.interruptTurn(threadId, turnId).catch(error => finish(error));
+      }, 100);
 
       this.request("turn/start", {
         threadId,

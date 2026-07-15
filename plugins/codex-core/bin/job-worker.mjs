@@ -35,6 +35,10 @@ async function main() {
   if (request.schemaVersion !== 3 || request.jobId !== parsed.jobId) throw new Error("Invalid immutable job request");
 
   const attempt = createAttempt(paths.jobDir, parsed.generation);
+  if (existsSync(paths.cancelPath)) {
+    appendEvent(attempt.eventsPath, { type: "cancelled", generation: parsed.generation });
+    process.exit(8);
+  }
   appendEvent(attempt.eventsPath, {
     type: "starting",
     generation: parsed.generation,
@@ -69,6 +73,7 @@ async function main() {
       effort: request.effort || "high",
       cwd: request.projectRoot,
       timeoutMs: request.timeoutMs,
+      cancelSignal: () => existsSync(paths.cancelPath),
       onStarted: id => {
         turnId = id;
         appendEvent(attempt.eventsPath, {
@@ -94,14 +99,26 @@ async function main() {
     });
 
     if (checkpointTimer) clearInterval(checkpointTimer);
+    if (result.status === "cancelled") {
+      appendEvent(attempt.eventsPath, {
+        type: "cancelled",
+        generation: parsed.generation,
+        threadId,
+        turnId: result.turnId || turnId,
+        charsReceived: result.text.length,
+        completedAt: new Date().toISOString(),
+      });
+      client.close();
+      process.exit(8);
+    }
     if (!existsSync(attempt.outputPath)) appendOutput(attempt.outputPath, "");
-    const resultPath = publishResult(paths.jobDir, attempt.outputPath);
     if (request.outputPath) {
       mkdirSync(dirname(request.outputPath), { recursive: true });
-      copyFileSync(resultPath, request.outputPath);
+      copyFileSync(attempt.outputPath, request.outputPath);
     }
+    publishResult(paths.jobDir, attempt.outputPath);
     appendEvent(attempt.eventsPath, {
-      type: result.status === "cancelled" ? "cancelled" : "completed",
+      type: "completed",
       generation: parsed.generation,
       threadId,
       turnId: result.turnId || turnId,
@@ -109,11 +126,11 @@ async function main() {
       completedAt: new Date().toISOString(),
     });
     client.close();
-    process.exit(result.status === "cancelled" ? 8 : 0);
+    process.exit(0);
   } catch (error) {
     if (checkpointTimer) clearInterval(checkpointTimer);
     appendEvent(attempt.eventsPath, {
-      type: "failed",
+      type: error?.retryable ? "recoverable_failure" : "failed",
       generation: parsed.generation,
       threadId,
       turnId,

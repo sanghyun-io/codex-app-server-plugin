@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,25 @@ function configuredConcurrency() {
   return Number.isInteger(value) && value > 0 ? value : 3;
 }
 
+function configuredRetryDelays() {
+  const parsed = String(process.env.CODEX_REVIEW_RETRY_DELAYS_MS || "1000,3000,10000")
+    .split(",")
+    .map(value => Number(value.trim()));
+  return parsed.length === 3 && parsed.every(value => Number.isFinite(value) && value >= 0)
+    ? parsed
+    : [1_000, 3_000, 10_000];
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseRuntime(argv) {
   const index = argv.indexOf("--runtime");
   if (index >= 0 && argv[index + 1]) return resolve(argv[index + 1]);
@@ -35,6 +55,8 @@ async function main() {
   if (!lock.acquired) process.exit(0);
 
   const workerProcesses = new Map();
+  const retryTimers = new Map();
+  const retryDelays = configuredRetryDelays();
   let recoveredJobs = recoverJobs(runtimeDir);
   let refreshTimer = null;
   let server;
@@ -56,9 +78,46 @@ async function main() {
     const activeIds = new Set(scheduler.snapshot().active.map(job => job.jobId));
     for (const state of recoveredJobs) {
       if (!activeIds.has(state.jobId)) continue;
+      const scheduledRetry = retryTimers.get(state.jobId);
+      if (scheduledRetry && state.generation > scheduledRetry.fromGeneration) {
+        if (scheduledRetry.timer) clearTimeout(scheduledRetry.timer);
+        retryTimers.delete(state.jobId);
+      }
       if (["completed", "cancelled", "failed"].includes(state.status)) {
+        const retryTimer = retryTimers.get(state.jobId)?.timer;
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimers.delete(state.jobId);
         scheduler.complete(state.jobId, state.status);
         workerProcesses.delete(state.jobId);
+        continue;
+      }
+      const workerLost = ["starting", "running"].includes(state.status)
+        && state.pid
+        && !isProcessAlive(Number(state.pid));
+      if ((state.status === "recovering" || workerLost) && !retryTimers.has(state.jobId)) {
+        if (state.cancelRequested) {
+          appendEvent(state.supervisorEventsPath, { type: "cancelled" });
+          scheduler.complete(state.jobId, "cancelled");
+          continue;
+        }
+        if (state.generation >= retryDelays.length) {
+          appendEvent(state.supervisorEventsPath, {
+            type: "failed",
+            error: `Automatic recovery exhausted after ${state.generation} attempts`,
+          });
+          scheduler.complete(state.jobId, "failed");
+          continue;
+        }
+        const delayMs = retryDelays[Math.max(0, state.generation - 1)];
+        const timer = setTimeout(() => {
+          const latest = stateFor({ jobId: state.jobId });
+          if (!latest || ["completed", "cancelled", "failed"].includes(latest.status)) {
+            retryTimers.delete(state.jobId);
+            return;
+          }
+          spawnJob(latest);
+        }, delayMs);
+        retryTimers.set(state.jobId, { timer, fromGeneration: state.generation });
       }
     }
   };
@@ -99,6 +158,10 @@ async function main() {
     if (closing) return;
     closing = true;
     if (refreshTimer) clearInterval(refreshTimer);
+    for (const retry of retryTimers.values()) {
+      if (retry.timer) clearTimeout(retry.timer);
+    }
+    retryTimers.clear();
     if (server) await server.close();
     releaseStartupLock(runtimeDir, nonce);
   };
@@ -141,6 +204,21 @@ async function main() {
         case "list":
           refreshScheduler();
           return scheduler.snapshot();
+        case "cancel": {
+          const state = stateFor(message.params);
+          if (!state) {
+            const error = new Error("Job not found");
+            error.code = "JOB_NOT_FOUND";
+            throw error;
+          }
+          if (["completed", "cancelled", "failed"].includes(state.status)) return state;
+          const disposition = scheduler.cancel(state.jobId);
+          writeFileSync(resolve(state.jobDir, "cancel.requested"), `${new Date().toISOString()}\n`, "utf8");
+          appendEvent(state.supervisorEventsPath, {
+            type: disposition === "queued" ? "cancelled" : "cancel_requested",
+          });
+          return { ...state, status: "cancelled", cancelRequested: true };
+        }
         case "shutdown-if-idle": {
           refreshScheduler();
           const snapshot = scheduler.snapshot();

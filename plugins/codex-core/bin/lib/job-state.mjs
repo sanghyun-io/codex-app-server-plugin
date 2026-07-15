@@ -36,7 +36,9 @@ export function reduceJob(request, supervisorEvents = [], attemptEvents = [], re
   };
 
   for (const event of supervisorEvents) {
-    if (event.type === "cancel_requested" || event.type === "cancelled") {
+    if (event.type === "cancel_requested") {
+      state = { ...state, cancelRequested: true, cancelRequestedAt: event.at };
+    } else if (event.type === "cancelled") {
       state = applyStatus(state, "cancelled", event);
     } else if (event.type === "failed") {
       state = applyStatus(state, "failed", event);
@@ -54,6 +56,8 @@ export function reduceJob(request, supervisorEvents = [], attemptEvents = [], re
       if ((Number(event.generation) || 0) !== currentGeneration) continue;
       if (["starting", "running", "recovering", "completed", "cancelled", "failed"].includes(event.type)) {
         state = applyStatus(state, event.type, event);
+      } else if (event.type === "recoverable_failure") {
+        state = applyStatus(state, "recovering", event);
       } else {
         state = { ...state, ...event, type: undefined };
       }
