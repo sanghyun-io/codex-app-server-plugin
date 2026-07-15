@@ -99,12 +99,13 @@ test("follow-up preserves the v3 thread and project binding", async t => {
   writeFileSync(firstPrompt, "First turn", "utf8");
   writeFileSync(secondPrompt, "Second turn", "utf8");
 
-  assert.equal(cli(["start", firstPrompt, firstOutput, "--session", "thread-session", "--review-dir", fx.reviewDir], fx.env).exit, 0);
+  assert.equal(cli(["start", firstPrompt, firstOutput, "--session", "thread-session", "--review-dir", fx.reviewDir, "--model", "gpt-5.6-sol"], fx.env).exit, 0);
   const first = JSON.parse((await poll("thread-session", fx.reviewDir, fx.env)).stdout);
   assert.equal(cli(["follow-up", secondPrompt, secondOutput, "--session", "thread-session", "--review-dir", fx.reviewDir], fx.env).exit, 0);
   const second = JSON.parse((await poll("thread-session", fx.reviewDir, fx.env)).stdout);
 
   assert.equal(second.threadId, first.threadId);
+  assert.equal(second.model, "gpt-5.6-sol");
   assert.equal(second.status, "completed");
   assert.equal(readFileSync(secondOutput, "utf8"), "v3 cli result");
 });
