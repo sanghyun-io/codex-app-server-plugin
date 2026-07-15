@@ -30,7 +30,7 @@
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/session-lifecycle.mjs end",
             "timeout": 10000,
-            "description": "Cancel session-owned workers with bounded, identity-verified escalation"
+            "description": "Preserve v3 durable jobs while cleaning up session-owned legacy workers"
           }
         ]
       }

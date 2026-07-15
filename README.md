@@ -8,7 +8,7 @@ A Claude Code plugin marketplace that integrates the **Codex App Server** with C
 
 | Plugin | What it gives you | Required |
 |--------|-------------------|:--------:|
-| **codex-core** | Everything needed to use Codex from Claude Code: CLI runtime, broker, hooks, natural language router, A+ task delegation (`/codex-core:delegate`), and session ops (`sessions`/`halt`/`readout`) | ✅ |
+| **codex-core** | Everything needed to use Codex from Claude Code: durable supervisor, isolated workers, hooks, natural language router, A+ task delegation (`/codex-core:delegate`), and session ops (`sessions`/`halt`/`readout`) | ✅ |
 | **codex-code-review** | Iterative multi-round code review and adversarial security review workflows (`/codex-code-review:code-review`, `/codex-code-review:red-review`) | Optional |
 
 After installing **codex-core** alone, sentences like "Codex에게 이 버그 고쳐달라고 해" or "Have Codex fix the race condition" already work — Claude routes them to the right skill automatically.
@@ -18,11 +18,12 @@ After installing **codex-core** alone, sentences like "Codex에게 이 버그 �
 ## How It Works
 
 ```
-Claude Code
-  └─ codex-review.mjs              (JSON-RPC wrapper — installed by codex-core)
-       └─ broker.mjs (TCP, opt-out) (persistent IPC multiplexer — auth cached, warm app-server)
-            └─ codex app-server      (single subprocess, shared across workers)
-                 └─ gpt-5.6-*          (stateful thread, model is configurable)
+Claude Code sessions
+  └─ codex-review.mjs             (compatible command client)
+       └─ supervisor.mjs          (durable FIFO queue, default concurrency: 3)
+            └─ job-worker.mjs     (one isolated worker per active turn)
+                 └─ codex app-server (one dedicated subprocess per job)
+                      └─ gpt-5.6-*   (stateful thread, model is configurable)
 ```
 
 The wrapper manages thread lifecycle via three commands:
@@ -30,7 +31,7 @@ The wrapper manages thread lifecycle via three commands:
 - `follow-up` — resume thread + next turn (incremental diff only)
 - `close` — clean up session state
 
-By default, workers connect through a **persistent broker** (`broker.mjs`) that holds a single warm `codex app-server` subprocess on a localhost TCP port. This eliminates per-turn spawn overhead (~2–3s), reuses a single auth check, and safely multiplexes concurrent turns by `threadId`/`turnId`. During an active turn the wrapper sends a 5-second heartbeat; after two missed replies it reconnects and reattaches to the broker's output snapshot without replaying the prompt. The broker auto-starts on first use and idles out after 10 minutes. `SessionEnd` cancels only workers owned by that Claude session, verifies each live process against its nonce before signalling, and uses bounded escalation while leaving the shared broker available to other sessions. Set `CODEX_REVIEW_NO_BROKER=1` to bypass it.
+Version 3 uses a persistent **supervisor with isolated workers**. The supervisor accepts work from multiple Claude sessions, runs three unrelated turns concurrently by default, and serializes follow-ups that share a Codex thread. Each active turn owns a dedicated `codex app-server`, so a transport or subprocess failure affects only that job. Jobs and partial output are journaled under `~/.claude/codex-runtime/v3`; a replacement supervisor recovers the queue while already-running workers continue independently. Recoverable app-server failures replay only the current turn with bounded backoff. `SessionEnd` does not cancel v3 jobs; use `cancel` or `halt` explicitly.
 
 Each session is bound to the canonical Git project root and sends that same `cwd` to both `thread/start` and `turn/start`. Follow-ups from another project fail before reaching Codex. Progress JSON exposes connection/validation/thread/first-output/streaming phases plus prompt size, first-output latency, received characters, protocol IDs, and reconnect count. Prompts over 131,072 characters are preserved intact and receive a latency warning only.
 
@@ -49,8 +50,9 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `CODEX_REVIEW_MODEL` | Override workflow/wrapper model | unset (wrapper default: `gpt-5.6-terra`) |
-| `CODEX_REVIEW_NO_BROKER` | Skip broker, spawn `codex app-server` directly (set to `1`) | unset |
-| `CODEX_REVIEW_HEARTBEAT_MS` | Broker heartbeat interval (advanced/testing) | `5000` |
+| `CODEX_REVIEW_CONCURRENCY` | Maximum number of unrelated v3 jobs running at once | `3` |
+| `CODEX_REVIEW_RUNTIME_DIR` | Override the durable v3 runtime directory | `~/.claude/codex-runtime/v3` |
+| `CODEX_REVIEW_NO_BROKER` | Accepted for v2 compatibility; v3 never uses the shared broker | unset |
 | `CODEX_BINARY` | Path to a custom binary used in place of `codex app-server` (testing hook) | unset |
 
 ## Prerequisites
@@ -85,16 +87,18 @@ When you update the plugin via `/plugin`, the **plugin cache** is refreshed, but
 
 ## Plugin: codex-core
 
-The runtime + universal workflows. Installs CLI binary, broker, hook scripts, schemas, the natural language router, A+ delegation, and session operations.
+The runtime + universal workflows. Installs the CLI, durable supervisor, isolated worker, hook scripts, schemas, natural language router, A+ delegation, and session operations.
 
 ### Installed Files
 
 | File | Location | Purpose |
 |------|----------|---------|
 | `codex-review.mjs` | `~/.claude/bin/` | JSON-RPC wrapper CLI |
-| `broker.mjs` | `~/.claude/bin/` | Persistent TCP broker for concurrent turn multiplexing and recovery |
+| `supervisor.mjs` | `~/.claude/bin/` | Durable multi-session queue and recovery coordinator |
+| `job-worker.mjs` | `~/.claude/bin/` | Isolated per-job app-server runner |
+| `broker.mjs` | `~/.claude/bin/` | Upgrade compatibility for already-running v2 work |
 | `lib/project-scope.mjs` | `~/.claude/bin/lib/` | Canonical project-root binding and comparison |
-| `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd handler (session-owned worker cancellation) |
+| `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd handler (v3 durable jobs survive session exit) |
 | `stop-gate.mjs` | `~/.claude/bin/` | Stop hook quality gate (active reviews / uncommitted changes) |
 | `review-output.schema.json` | `~/.claude/schemas/` | JSON schema for structured review output |
 | `review-protocol.md` | `~/.claude/rules/` | Shared call protocol (session ID, polling, error handling) |
@@ -108,7 +112,7 @@ The runtime + universal workflows. Installs CLI binary, broker, hook scripts, sc
 |-------|--------|---------|
 | `Setup` | `scripts/install.sh` | Copies bin/schemas/rules into `~/.claude/`, manages CLAUDE.md marker block |
 | `SessionStart` | `session-lifecycle.mjs start` | Exports session metadata for worker coordination |
-| `SessionEnd` | `session-lifecycle.mjs end` | Marker-first cancellation for workers owned by the ending session, followed by nonce-verified bounded escalation; the shared broker exits on idle timeout |
+| `SessionEnd` | `session-lifecycle.mjs end` | Preserve v3 durable jobs and clean up only session-owned legacy workers |
 | `Stop` | `stop-gate.mjs` | Blocks session stop when reviews are in flight or unreviewed changes exist |
 
 ### Skills

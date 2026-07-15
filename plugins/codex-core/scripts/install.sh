@@ -24,6 +24,14 @@ cp "$PLUGIN_ROOT/bin/codex-review.mjs" "$BIN_DIR/"
 chmod +x "$BIN_DIR/codex-review.mjs"
 echo -e "✓ Installed ${GREEN}~/.claude/bin/codex-review.mjs${NC}"
 
+for runtime_file in supervisor.mjs job-worker.mjs; do
+  if [ -f "$PLUGIN_ROOT/bin/$runtime_file" ]; then
+    cp "$PLUGIN_ROOT/bin/$runtime_file" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/$runtime_file"
+    echo -e "✓ Installed ${GREEN}~/.claude/bin/${runtime_file}${NC}"
+  fi
+done
+
 if [ -f "$PLUGIN_ROOT/bin/broker.mjs" ]; then
   cp "$PLUGIN_ROOT/bin/broker.mjs" "$BIN_DIR/"
   chmod +x "$BIN_DIR/broker.mjs"
@@ -35,6 +43,15 @@ if [ -f "$PLUGIN_ROOT/bin/lib/project-scope.mjs" ]; then
   test -f "$BIN_DIR/lib/project-scope.mjs"
   echo -e "✓ Installed ${GREEN}~/.claude/bin/lib/project-scope.mjs${NC}"
 fi
+
+for lib_file in "$PLUGIN_ROOT/bin/lib"/*.mjs; do
+  if [ -f "$lib_file" ]; then
+    filename=$(basename "$lib_file")
+    cp "$lib_file" "$BIN_DIR/lib/"
+    test -f "$BIN_DIR/lib/$filename"
+  fi
+done
+echo -e "✓ Installed ${GREEN}v3 runtime libraries${NC}"
 
 # 2. schemas → ~/.claude/schemas/
 SCHEMA_DIR="$HOME/.claude/schemas"

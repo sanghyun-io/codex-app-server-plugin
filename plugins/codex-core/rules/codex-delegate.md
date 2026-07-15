@@ -324,10 +324,8 @@ review-protocol.md의 비동기 실행 규칙을 적용한다:
 | Turn N 출력 | `{REVIEW_DIR}/dg_{SID}_t{N}_output.txt` |
 | Turn N 패치 (diff) | `{REVIEW_DIR}/dg_{SID}_t{N}_patch.diff` |
 | 히스토리 | `{REVIEW_DIR}/dg_{SID}_history.md` |
-| Thread 상태 | `{REVIEW_DIR}/dg_{SID}_state.json` |
-| Worker 진행 상황 | `{REVIEW_DIR}/dg_{SID}_progress.json` |
-| Worker PID | `{REVIEW_DIR}/dg_{SID}_pid` |
-| Worker 로그 | `{REVIEW_DIR}/dg_{SID}_worker.log` |
+| Durable 상태 | `codex-review status --session dg_{SID}` |
+| 런타임 journal | `~/.claude/codex-runtime/v3/jobs/` (CLI를 통해 조회) |
 
 > Delegate는 `dg_{SID}_*` 패턴을 사용한다. Turn 번호는 `t{N}` (code review의 `r{N}`과 구분).
 

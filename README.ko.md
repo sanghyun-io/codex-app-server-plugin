@@ -8,7 +8,7 @@
 
 | 플러그인 | 제공 기능 | 필수 여부 |
 |---------|----------|:--------:|
-| **codex-core** | Claude Code에서 Codex를 쓰는 데 필요한 모든 것: CLI 런타임, broker, hooks, 자연어 라우터, A+ 작업 위임 (`/codex-core:delegate`), 세션 운영 (`sessions`/`halt`/`readout`) | ✅ |
+| **codex-core** | Claude Code에서 Codex를 쓰는 데 필요한 모든 것: durable supervisor, 격리 worker, hooks, 자연어 라우터, A+ 작업 위임 (`/codex-core:delegate`), 세션 운영 (`sessions`/`halt`/`readout`) | ✅ |
 | **codex-code-review** | 반복 라운드 코드 리뷰 + 공격자 관점 보안 리뷰 워크플로 (`/codex-code-review:code-review`, `/codex-code-review:red-review`) | 선택 |
 
 **codex-core**만 설치해도 "Codex에게 이 버그 고쳐달라고 해" 같은 자연어 발화가 동작합니다 — Claude가 알아서 적절한 스킬로 라우팅합니다.
@@ -18,11 +18,12 @@
 ## 동작 방식
 
 ```
-Claude Code
-  └─ codex-review.mjs              (JSON-RPC wrapper — codex-core가 설치)
-       └─ broker.mjs (TCP, opt-out) (영속 IPC 멀티플렉서 — auth 캐시, warm app-server)
-            └─ codex app-server      (단일 subprocess, 모든 워커가 공유)
-                 └─ gpt-5.6-*          (stateful thread, 모델 변경 가능)
+여러 Claude Code 세션
+  └─ codex-review.mjs             (호환 명령 클라이언트)
+       └─ supervisor.mjs          (durable FIFO queue, 기본 동시 실행 3개)
+            └─ job-worker.mjs     (활성 turn마다 격리 worker)
+                 └─ codex app-server (작업별 전용 subprocess)
+                      └─ gpt-5.6-*   (stateful thread, 모델 변경 가능)
 ```
 
 Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
@@ -30,7 +31,7 @@ Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
 - `follow-up` — thread resume + 다음 turn (증분 diff만 전송)
 - `close` — 세션 상태 정리
 
-기본적으로 워커는 **영속 broker**(`broker.mjs`)를 통해 연결됩니다. broker는 localhost TCP 포트에서 단일 warm `codex app-server` subprocess를 유지해 turn마다 발생하는 spawn 오버헤드(~2–3초)를 제거하고, auth 체크를 재사용하며, 동시 turn을 `threadId`/`turnId`로 안전하게 분리합니다. 실행 중에는 5초 heartbeat를 보내고 2회 연속 응답이 없으면 재접속하여 broker 출력 스냅샷에 재부착하므로 프롬프트를 재전송하지 않습니다. broker는 첫 사용 시 자동 시작되고 10분 idle 후 종료됩니다. `SessionEnd`는 해당 Claude 세션 소유 워커만 취소하며 다른 세션이 공유 broker를 계속 사용할 수 있게 유지합니다. `CODEX_REVIEW_NO_BROKER=1`로 우회할 수 있습니다.
+버전 3은 **영속 Supervisor + 격리 Worker** 구조를 사용합니다. Supervisor는 여러 Claude 세션의 작업을 받아 기본 3개까지 병렬 실행하고, 같은 Codex thread의 follow-up은 직렬화합니다. 활성 turn마다 전용 `codex app-server`를 사용하므로 transport나 subprocess 장애는 해당 작업에만 영향을 줍니다. 작업과 부분 출력은 `~/.claude/codex-runtime/v3`에 journal로 남으며, Supervisor가 교체돼도 실행 중 worker는 독립적으로 계속 동작합니다. 복구 가능한 app-server 장애는 현재 turn만 제한적으로 재실행합니다. `SessionEnd`는 v3 작업을 취소하지 않으며 명시적인 `cancel` 또는 `halt`만 작업을 중단합니다.
 
 각 세션은 canonical Git 프로젝트 루트에 고정되며 동일한 `cwd`가 `thread/start`와 `turn/start`에 전달됩니다. 다른 프로젝트에서 follow-up하면 Codex 호출 전에 실패합니다. progress JSON에는 연결/모델 검증/thread 시작/최초 출력 대기/스트리밍 단계와 프롬프트 크기, 최초 출력 지연, 수신 글자 수, protocol ID, 재접속 횟수가 기록됩니다. 131,072자를 초과하는 프롬프트는 자르지 않고 그대로 전달하며 지연 경고만 남깁니다.
 
@@ -49,8 +50,9 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 | 변수 | 용도 | 기본값 |
 |------|------|--------|
 | `CODEX_REVIEW_MODEL` | 워크플로/wrapper 모델 오버라이드 | unset (wrapper 기본값: `gpt-5.6-terra`) |
-| `CODEX_REVIEW_NO_BROKER` | broker 생략, `codex app-server` 직접 spawn (`1`로 설정) | unset |
-| `CODEX_REVIEW_HEARTBEAT_MS` | broker heartbeat 간격 (고급/테스트용) | `5000` |
+| `CODEX_REVIEW_CONCURRENCY` | 동시에 실행할 수 있는 서로 다른 v3 작업 수 | `3` |
+| `CODEX_REVIEW_RUNTIME_DIR` | durable v3 runtime 디렉터리 변경 | `~/.claude/codex-runtime/v3` |
+| `CODEX_REVIEW_NO_BROKER` | v2 호환용으로 허용; v3는 공유 broker를 사용하지 않음 | unset |
 | `CODEX_BINARY` | `codex app-server` 대신 사용할 커스텀 바이너리 경로 (테스트용) | unset |
 
 ## 사전 요구사항
@@ -85,16 +87,18 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 
 ## Plugin: codex-core
 
-런타임 + 범용 워크플로. CLI 바이너리, broker, hook 스크립트, 스키마, 자연어 라우터, A+ 위임, 세션 운영을 설치합니다.
+런타임 + 범용 워크플로. CLI, durable supervisor, 격리 worker, hook 스크립트, 스키마, 자연어 라우터, A+ 위임, 세션 운영을 설치합니다.
 
 ### 설치 파일
 
 | 파일 | 위치 | 용도 |
 |------|------|------|
 | `codex-review.mjs` | `~/.claude/bin/` | JSON-RPC wrapper CLI |
-| `broker.mjs` | `~/.claude/bin/` | 동시 turn 멀티플렉싱·복구용 영속 TCP broker |
+| `supervisor.mjs` | `~/.claude/bin/` | 다중 세션 durable queue와 자동 복구 |
+| `job-worker.mjs` | `~/.claude/bin/` | 작업별 격리 app-server 실행기 |
+| `broker.mjs` | `~/.claude/bin/` | 실행 중인 v2 작업의 업그레이드 호환용 broker |
 | `lib/project-scope.mjs` | `~/.claude/bin/lib/` | canonical 프로젝트 루트 고정 및 비교 |
-| `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd 핸들러 (세션 소유 워커 취소) |
+| `session-lifecycle.mjs` | `~/.claude/bin/` | SessionStart/SessionEnd 핸들러 (v3 durable 작업 유지) |
 | `stop-gate.mjs` | `~/.claude/bin/` | Stop hook 품질 게이트 (진행 중 리뷰 / 미커밋 변경 차단) |
 | `review-output.schema.json` | `~/.claude/schemas/` | 구조화된 리뷰 출력 JSON 스키마 |
 | `review-protocol.md` | `~/.claude/rules/` | 공통 호출 프로토콜 (세션 ID, 폴링, 에러 처리) |
@@ -108,7 +112,7 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 |-------|---------|------|
 | `Setup` | `scripts/install.sh` | bin/schemas/rules를 `~/.claude/`에 복사, CLAUDE.md 마커 블록 관리 |
 | `SessionStart` | `session-lifecycle.mjs start` | 워커 조정용 세션 메타데이터 export |
-| `SessionEnd` | `session-lifecycle.mjs end` | 종료되는 Claude 세션 소유 워커만 취소; 공유 broker는 idle timeout으로 종료 |
+| `SessionEnd` | `session-lifecycle.mjs end` | v3 durable 작업은 유지하고 legacy 세션 소유 worker만 정리 |
 | `Stop` | `stop-gate.mjs` | 진행 중 리뷰가 있거나 미리뷰 변경이 있으면 세션 stop 차단 |
 
 ### 스킬

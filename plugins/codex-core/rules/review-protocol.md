@@ -81,10 +81,8 @@ SID=$(date +%s)_$$ && REVIEW_DIR="{HOME_LITERAL}/.claude/tmp" && mkdir -p "$REVI
 | Round N 프롬프트 | `{REVIEW_DIR}/cr_{SID}_r{N}_prompt.txt` |
 | Round N 출력 | `{REVIEW_DIR}/cr_{SID}_r{N}_output.txt` |
 | 리뷰 히스토리 | `{REVIEW_DIR}/cr_{SID}_history.md` |
-| Thread 상태 | `{REVIEW_DIR}/cr_{SID}_state.json` |
-| Worker 진행 상황 | `{REVIEW_DIR}/cr_{SID}_progress.json` |
-| Worker PID | `{REVIEW_DIR}/cr_{SID}_pid` |
-| Worker 로그 | `{REVIEW_DIR}/cr_{SID}_worker.log` |
+| Durable 상태 | `codex-review status --session cr_{SID}` |
+| 런타임 journal | `~/.claude/codex-runtime/v3/jobs/` (CLI를 통해 조회) |
 
 > `{SID}`는 세션 ID, `{REVIEW_DIR}`은 `{HOME_LITERAL}/.claude/tmp`으로 치환한다 (`{HOME_LITERAL}`은 세션 초기화에서 확인한 리터럴 경로).
 > 프롬프트 파일은 `--stdin` 플래그를 사용하여 CLI가 직접 작성한다 (Write 도구 불필요).
@@ -130,9 +128,9 @@ echo "EXIT_CODE: $?"
 > **핵심**:
 > - `--stdin`으로 프롬프트를 stdin에서 읽어 `<prompt-file>`에 자동 저장 → **Write 도구 인가 불필요**
 > - `start` 명령은 **즉시 반환** (exit 0). 실제 Codex 호출은 백그라운드 워커가 처리
-> - 워커는 진행 상황을 `cr_{SID}_progress.json`에 3초 간격으로 기록
+> - worker는 부분 출력과 상태 checkpoint를 durable runtime에 최대 3초 간격으로 기록
 > - 세션은 시작한 canonical Git 프로젝트 루트에 고정되며, 다른 프로젝트의 follow-up은 실행 전에 거부
-> - 장기 turn은 broker heartbeat와 `threadId`/`turnId` 스냅샷 재부착으로 복구하며 프롬프트를 재전송하지 않음
+> - 장기 turn은 격리 worker가 처리하며 Supervisor 교체 시 계속 실행되고 app-server 장애 시 현재 turn만 자동 재실행
 > - 결과 확인은 **Step 2 (폴링)**으로 진행
 > - `--session`과 `--review-dir`는 필수 인자
 > - heredoc 종료 후 `echo "EXIT_CODE: $?"`로 exit code 확인

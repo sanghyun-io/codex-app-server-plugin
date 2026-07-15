@@ -11,7 +11,7 @@ triggers:
 # Codex Session Operations
 
 실행 중인 Codex 세션을 관찰/중단/결과 조회하는 공통 프로토콜.
-code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파일(`{REVIEW_DIR}/{prefix}_{SID}_*`)을 대상으로 한다.
+code-review, delegate, red-review 등 모든 스킬이 제출한 v3 durable job을 대상으로 한다.
 
 ---
 
@@ -23,8 +23,8 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 | Order | Action |
 |:-----:|--------|
-| 1 | `{REVIEW_DIR}` 디렉토리의 `*_progress.json` + `*_state.json` 파일을 Glob으로 수집 |
-| 2 | 각 세션 파일을 Read로 읽어 상태 파싱 |
+| 1 | `codex-review list --review-dir {REVIEW_DIR}` 실행 |
+| 2 | 반환된 `jobs` 배열에서 최신 상태와 output 경로 파싱 |
 | 3 | Prefix별로 그룹화하여 표 출력 (`cr_` / `dg_` / `rr_`) |
 | 4 | 2분 이상 실행 중인 세션은 시각적으로 강조 |
 
@@ -53,9 +53,9 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 
 ---
 
-## 파일 포맷
+## 상태 포맷
 
-### progress.json (워커가 3초 간격으로 기록)
+### `codex-review status` JSON
 
 ```json
 {
@@ -76,9 +76,9 @@ code-review, delegate, red-review 등 모든 스킬이 사용하는 세션 파�
 }
 ```
 
-**status 값**: `queued` / `connecting` / `validating_model` / `starting_thread` / `waiting_first_output` / `streaming` / `reconnecting` / `completed` / `timeout_partial` / `cancelled` / `crashed` / `failed`
+**status 값**: `queued` / `starting` / `running` / `recovering` / `completed` / `cancelled` / `failed`
 
-### state.json (Thread 메타데이터)
+### Thread 메타데이터
 
 ```json
 {
