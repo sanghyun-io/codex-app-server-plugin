@@ -58,6 +58,45 @@ test("the reducer ignores events from stale attempt generations", () => {
   assert.equal(state.threadId, "thread-2");
 });
 
+test("a durable dispatch reserves the job before the worker writes its first event", () => {
+  const state = reduceJob(
+    { schemaVersion: 3, jobId: "job-dispatched", ...request() },
+    [
+      { type: "queued", seq: 1 },
+      { type: "dispatched", generation: 1, pid: 4242, nonce: "worker-1", seq: 2 },
+    ],
+    [],
+    false,
+  );
+
+  assert.equal(state.status, "starting");
+  assert.equal(state.generation, 1);
+  assert.equal(state.pid, 4242);
+  assert.equal(state.nonce, "worker-1");
+});
+
+test("a newer durable dispatch wins over stale attempt completion", () => {
+  const state = reduceJob(
+    { schemaVersion: 3, jobId: "job-redispatched", ...request() },
+    [
+      { type: "queued", seq: 1 },
+      { type: "dispatched", generation: 1, pid: 1111, nonce: "worker-1", seq: 2 },
+      { type: "dispatched", generation: 2, pid: 2222, nonce: "worker-2", seq: 3 },
+    ],
+    [
+      { type: "starting", generation: 1, seq: 1 },
+      { type: "running", generation: 1, seq: 2 },
+      { type: "completed", generation: 1, seq: 3 },
+    ],
+    false,
+  );
+
+  assert.equal(state.status, "starting");
+  assert.equal(state.generation, 2);
+  assert.equal(state.pid, 2222);
+  assert.equal(state.nonce, "worker-2");
+});
+
 test("an immutable result is completion evidence when the terminal event is lost", () => {
   const state = reduceJob(
     { schemaVersion: 3, jobId: "job-2", ...request() },

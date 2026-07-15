@@ -34,9 +34,13 @@ export function reduceJob(request, supervisorEvents = [], attemptEvents = [], re
     generation: 0,
     error: null,
   };
+  let latestDispatch = null;
 
   for (const event of supervisorEvents) {
-    if (event.type === "cancel_requested") {
+    if (event.type === "dispatched") {
+      const generation = Number(event.generation) || 0;
+      if (generation > (Number(latestDispatch?.generation) || 0)) latestDispatch = event;
+    } else if (event.type === "cancel_requested") {
       state = { ...state, cancelRequested: true, cancelRequestedAt: event.at };
     } else if (event.type === "cancelled") {
       state = applyStatus(state, "cancelled", event);
@@ -48,10 +52,15 @@ export function reduceJob(request, supervisorEvents = [], attemptEvents = [], re
   const generations = attemptEvents
     .map(event => Number(event.generation) || 0)
     .filter(generation => generation > 0);
-  const currentGeneration = generations.length ? Math.max(...generations) : 0;
+  const attemptGeneration = generations.length ? Math.max(...generations) : 0;
+  const dispatchGeneration = Number(latestDispatch?.generation) || 0;
+  const currentGeneration = Math.max(attemptGeneration, dispatchGeneration);
+  state.generation = currentGeneration;
 
   if (!isTerminalStatus(state.status)) {
-    state.generation = currentGeneration;
+    if (latestDispatch && dispatchGeneration === currentGeneration) {
+      state = applyStatus(state, "starting", latestDispatch);
+    }
     for (const event of attemptEvents) {
       if ((Number(event.generation) || 0) !== currentGeneration) continue;
       if (["starting", "running", "recovering", "completed", "cancelled", "failed"].includes(event.type)) {

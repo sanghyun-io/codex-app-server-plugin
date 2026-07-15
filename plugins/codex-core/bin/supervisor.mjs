@@ -101,7 +101,7 @@ async function main() {
           scheduler.complete(state.jobId, "cancelled");
           continue;
         }
-        if (state.generation >= retryDelays.length) {
+        if (state.generation > retryDelays.length) {
           appendEvent(state.supervisorEventsPath, {
             type: "failed",
             error: `Automatic recovery exhausted after ${state.generation} attempts`,

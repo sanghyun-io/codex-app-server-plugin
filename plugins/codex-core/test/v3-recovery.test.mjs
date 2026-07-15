@@ -84,6 +84,26 @@ test("an app-server crash replays only the current turn in a new generation", as
   assert.equal(readFileSync(outputPath, "utf8"), "complete after recovery");
 });
 
+test("automatic recovery allows three replacement attempts before failing", async t => {
+  const runtimeDir = tempRuntime();
+  const outputPath = join(runtimeDir, "exhausted.txt");
+  const supervisor = launch(runtimeDir, {
+    CODEX_REVIEW_RETRY_DELAYS_MS: "5,10,15",
+    FAKE_EXIT_AFTER_FIRST_DELTA: "1",
+  });
+  t.after(() => { if (supervisor.exitCode === null) supervisor.kill(); });
+  await ready(runtimeDir);
+
+  const submitted = await requestRuntime("submit", request("exhaustion-session", outputPath), { runtimeDir });
+  const terminal = await waitUntil(
+    () => requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir }),
+    value => value?.status === "failed",
+  );
+
+  assert.equal(terminal.generation, 4);
+  assert.match(terminal.error, /exhausted after 4 attempts/i);
+});
+
 test("a worker continues while the supervisor is replaced", async t => {
   const runtimeDir = tempRuntime();
   const outputPath = join(runtimeDir, "survived.txt");
