@@ -1899,7 +1899,7 @@ function usesV3Runtime(parsed) {
   return process.env.CODEX_REVIEW_V2 !== "1"
     && !parsed.foreground
     && !parsed.isWorker
-    && ["start", "follow-up", "status", "cancel", "close"].includes(parsed.command);
+    && ["start", "follow-up", "status", "cancel", "close", "list"].includes(parsed.command);
 }
 
 async function prepareV3Prompt(parsed) {
@@ -1927,6 +1927,7 @@ async function v3StartOrFollowUp(parsed) {
     prompt,
     outputPath: resolve(parsed.positional[1]),
     model: parsed.model,
+    modelExplicit: parsed.modelExplicit,
     effort: "high",
     timeoutMs: parsed.timeout,
     projectRoot: parsed.projectRoot,
@@ -1983,6 +1984,14 @@ async function v3Close(parsed) {
   log(`Session ${parsed.sessionId} closed.`);
 }
 
+async function v3List() {
+  await ensureSupervisor({ runtimeDir: V3_RUNTIME_DIR });
+  const snapshot = await requestRuntime("list", {}, { runtimeDir: V3_RUNTIME_DIR });
+  const jobs = [...snapshot.active, ...snapshot.queued, ...snapshot.terminal]
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+  console.log(JSON.stringify({ schemaVersion: 3, concurrency: snapshot.concurrency, jobs }, null, 2));
+}
+
 async function runV3Command(parsed) {
   try {
     switch (parsed.command) {
@@ -1991,6 +2000,7 @@ async function runV3Command(parsed) {
       case "status": return await v3Status(parsed);
       case "cancel": return await v3Cancel(parsed);
       case "close": return await v3Close(parsed);
+      case "list": return await v3List(parsed);
       default: return undefined;
     }
   } catch (error) {
@@ -2013,6 +2023,7 @@ Usage:
   codex-review status     --session <SID> --review-dir <DIR>
   codex-review cancel     --session <SID> --review-dir <DIR>
   codex-review close      --session <SID> --review-dir <DIR>
+  codex-review list       [--review-dir <DIR>]
   codex-review scope      [<base-ref>]
 
 Options:
@@ -2085,8 +2096,8 @@ function parseArgs(argv) {
     }
   }
 
-  // scope command doesn't require --session / --review-dir
-  if (command === "scope") {
+  // scope/list commands don't require --session / --review-dir
+  if (command === "scope" || command === "list") {
     return {
       command,
       positional,

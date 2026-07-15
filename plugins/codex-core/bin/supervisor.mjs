@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { appendEvent, createJob, recoverJobs } from "./lib/job-store.mjs";
 import { JobScheduler } from "./lib/job-scheduler.mjs";
+import { sameProject } from "./lib/project-scope.mjs";
 import {
   acquireStartupLock,
   createRuntimeServer,
@@ -185,7 +186,13 @@ async function main() {
               error.code = "THREAD_NOT_READY";
               throw error;
             }
+            if (!sameProject(previous.projectRoot, request.projectRoot)) {
+              const error = new Error(`Session project mismatch: ${previous.projectRoot} != ${request.projectRoot}`);
+              error.code = "PROJECT_MISMATCH";
+              throw error;
+            }
             request.threadId = previous.threadId;
+            if (!request.modelExplicit) request.model = previous.model;
           }
           const record = createJob(runtimeDir, request);
           const state = stateFor({ jobId: record.jobId });
