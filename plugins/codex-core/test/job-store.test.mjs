@@ -175,6 +175,17 @@ test("recoverJobs quarantines one corrupt job without hiding healthy jobs", () =
   assert.match(corrupt.error, /request\.json|JSON|Unexpected/i);
 });
 
+test("a durable cancel marker prevents a queued job from being redispatched", () => {
+  const runtime = tempRuntime();
+  const job = createJob(runtime, request(), { jobId: "job-cancel-window" });
+  writeFileSync(join(job.jobDir, "cancel.requested"), "cancel\n", "utf8");
+
+  const recovered = recoverJobs(runtime).find(state => state.jobId === job.jobId);
+
+  assert.equal(recovered.status, "cancelled");
+  assert.equal(recovered.cancelRequested, true);
+});
+
 test("best-effort events isolate ancillary write failures", async () => {
   const { appendEventBestEffort } = await import("../bin/lib/job-store.mjs");
   const errors = [];

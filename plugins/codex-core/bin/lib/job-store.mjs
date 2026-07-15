@@ -165,13 +165,18 @@ export function recoverJobs(runtimeDir) {
       const supervisorEventsPath = join(jobDir, "supervisor.events.jsonl");
       try {
         const request = JSON.parse(readFileSync(requestPath, "utf8"));
+        const state = reduceJob(
+          request,
+          readEvents(supervisorEventsPath),
+          attemptEvents(jobDir),
+          existsSync(join(jobDir, "result.txt")),
+        );
+        if (existsSync(join(jobDir, "cancel.requested"))) {
+          state.cancelRequested = true;
+          if (state.status === "queued") state.status = "cancelled";
+        }
         return {
-          ...reduceJob(
-            request,
-            readEvents(supervisorEventsPath),
-            attemptEvents(jobDir),
-            existsSync(join(jobDir, "result.txt")),
-          ),
+          ...state,
           jobDir,
           requestPath,
           supervisorEventsPath,

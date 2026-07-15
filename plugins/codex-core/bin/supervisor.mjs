@@ -108,6 +108,7 @@ async function main() {
   let refreshTimer = null;
   let server;
   let closing = false;
+  let scheduleCancelEscalation = () => {};
   const stateFor = params => {
     const states = recoverJobs(runtimeDir);
     if (params?.jobId) return states.find(job => job.jobId === params.jobId) || null;
@@ -144,6 +145,12 @@ async function main() {
       const workerLost = ["starting", "running"].includes(state.status)
         && state.pid
         && !isProcessAlive(Number(state.pid));
+      if (state.cancelRequested
+        && ["starting", "running"].includes(state.status)
+        && state.pid
+        && isProcessAlive(Number(state.pid))) {
+        scheduleCancelEscalation(state);
+      }
       if ((state.status === "recovering" || workerLost) && !retryTimers.has(state.jobId)) {
         if (state.cancelRequested) {
           appendEvent(state.supervisorEventsPath, { type: "cancelled" });
@@ -199,7 +206,7 @@ async function main() {
     child.unref();
   };
 
-  const scheduleCancelEscalation = state => {
+  scheduleCancelEscalation = state => {
     if (cancelTimers.has(state.jobId)) return;
     const identity = {
       generation: Number(state.generation),

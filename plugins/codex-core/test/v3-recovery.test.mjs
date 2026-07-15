@@ -201,3 +201,43 @@ test("cancellation force-terminates a nonce-matched worker stuck during initiali
   }, Boolean, 3_000);
   assert.equal(existsSync(outputPath), false);
 });
+
+test("a replacement supervisor restores cancellation escalation", async t => {
+  const runtimeDir = tempRuntime();
+  const outputPath = join(runtimeDir, "cancel-restart.txt");
+  const requestLog = join(runtimeDir, "cancel-restart-requests.jsonl");
+  const appServerPidFile = join(runtimeDir, "cancel-restart-app-server.pid");
+  let supervisor = launch(runtimeDir, {
+    CODEX_REVIEW_CANCEL_GRACE_MS: "5000",
+    FAKE_INITIALIZE_DELAY_MS: "5000",
+    FAKE_REQUEST_LOG: requestLog,
+    FAKE_PID_FILE: appServerPidFile,
+  });
+  t.after(() => { if (supervisor.exitCode === null) supervisor.kill(); });
+  await ready(runtimeDir);
+  const submitted = await requestRuntime("submit", request("cancel-restart-session", outputPath), { runtimeDir });
+  await waitUntil(
+    async () => existsSync(requestLog) ? readFileSync(requestLog, "utf8") : "",
+    value => value.includes('"method":"initialize"'),
+  );
+  const starting = await requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir });
+  await requestRuntime("cancel", { jobId: submitted.jobId }, { runtimeDir });
+
+  const exited = new Promise(resolvePromise => supervisor.once("exit", resolvePromise));
+  supervisor.kill("SIGKILL");
+  await exited;
+  supervisor = launch(runtimeDir, { CODEX_REVIEW_CANCEL_GRACE_MS: "100" });
+  await ready(runtimeDir);
+
+  await waitUntil(
+    () => requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir }),
+    value => value?.status === "cancelled",
+    3_000,
+  );
+  const appServerPid = Number(readFileSync(appServerPidFile, "utf8").trim());
+  for (const pid of [starting.pid, appServerPid]) {
+    await waitUntil(async () => {
+      try { process.kill(pid, 0); return false; } catch { return true; }
+    }, Boolean, 3_000);
+  }
+});
