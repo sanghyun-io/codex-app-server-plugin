@@ -26,6 +26,7 @@ const TMP_DIR = resolve(HOME, ".claude", "tmp");
 const HOOK_EVENT = process.argv[2] || ""; // "start" or "end"
 const DEFAULT_SESSION_END_GRACE_MS = 7_000;
 const MAX_SESSION_END_GRACE_MS = 7_000;
+const WINDOWS_IDENTITY_LOOKUP_MS = 2_000;
 const graceValue = process.env.CODEX_REVIEW_SESSION_END_GRACE_MS;
 const configuredGraceMs = graceValue?.trim() ? Number(graceValue) : Number.NaN;
 const SESSION_END_GRACE_MS = Number.isFinite(configuredGraceMs) && configuredGraceMs >= 0
@@ -84,14 +85,17 @@ function readWindowsProcessCommandLines(pids) {
   const validPids = [...new Set(pids.filter(pid => Number.isInteger(pid) && pid > 0))];
   if (validPids.length === 0) return new Map();
 
+  const filter = validPids.map(pid => `ProcessId = ${pid}`).join(" OR ");
   const command = [
     "$ErrorActionPreference = 'Stop'",
-    `$ids = @(${validPids.join(",")})`,
-    "$items = @(Get-CimInstance Win32_Process | Where-Object { $ids -contains [int]$_.ProcessId } | Select-Object ProcessId, CommandLine)",
+    `$items = @(Get-CimInstance Win32_Process -Filter '${filter}' | Select-Object ProcessId, CommandLine)`,
     "[Console]::Out.Write(($items | ConvertTo-Json -Compress))",
   ].join("; ");
 
+  const deadline = Date.now() + WINDOWS_IDENTITY_LOOKUP_MS;
   for (const executable of ["powershell.exe", "pwsh.exe"]) {
+    const timeout = deadline - Date.now();
+    if (timeout <= 0) break;
     try {
       const raw = execFileSync(
         executable,
@@ -99,7 +103,7 @@ function readWindowsProcessCommandLines(pids) {
         {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1_000,
+          timeout,
           windowsHide: true,
         },
       ).trim();
