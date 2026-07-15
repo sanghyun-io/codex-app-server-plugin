@@ -80,6 +80,11 @@ test("background CLI commands use the v3 supervisor by default", async t => {
   assert.equal(status.status, "completed");
   assert.equal(status.schemaVersion, 3);
   assert.equal(readFileSync(output, "utf8"), "v3 cli result");
+
+  const listed = cli(["list", "--review-dir", fx.reviewDir], fx.env);
+  assert.equal(listed.exit, 0, listed.stderr);
+  const jobs = JSON.parse(listed.stdout).jobs;
+  assert.equal(jobs.some(job => job.sessionId === "cli-session" && job.status === "completed"), true);
 });
 
 test("follow-up preserves the v3 thread and project binding", async t => {
