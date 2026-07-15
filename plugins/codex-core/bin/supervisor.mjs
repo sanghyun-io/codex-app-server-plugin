@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,11 @@ function configuredRetryDelays() {
     : [1_000, 3_000, 10_000];
 }
 
+function configuredCancelGrace() {
+  const value = Number(process.env.CODEX_REVIEW_CANCEL_GRACE_MS || 5_000);
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, 30_000) : 5_000;
+}
+
 function isProcessAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -41,6 +46,46 @@ function isProcessAlive(pid) {
   } catch {
     return false;
   }
+}
+
+function readProcessCommandLine(pid) {
+  if (!isProcessAlive(pid)) return null;
+  if (process.platform === "win32") {
+    const command = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($p) { [Console]::Out.Write($p.CommandLine) }`;
+    for (const executable of ["powershell.exe", "pwsh.exe"]) {
+      try {
+        return execFileSync(executable, [
+          "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command,
+        ], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 2_000,
+          windowsHide: true,
+        });
+      } catch { /* try the other PowerShell host */ }
+    }
+    return null;
+  }
+  try { return readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch {
+    try {
+      return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch { return null; }
+  }
+}
+
+function terminateProcessTree(pid) {
+  if (process.platform === "win32") {
+    execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    });
+    return;
+  }
+  try { process.kill(-pid, "SIGKILL"); } catch { process.kill(pid, "SIGKILL"); }
 }
 
 function parseRuntime(argv) {
@@ -57,6 +102,7 @@ async function main() {
 
   const workerProcesses = new Map();
   const retryTimers = new Map();
+  const cancelTimers = new Map();
   const retryDelays = configuredRetryDelays();
   let recoveredJobs = recoverJobs(runtimeDir);
   let refreshTimer = null;
@@ -88,6 +134,9 @@ async function main() {
         const retryTimer = retryTimers.get(state.jobId)?.timer;
         if (retryTimer) clearTimeout(retryTimer);
         retryTimers.delete(state.jobId);
+        const cancelTimer = cancelTimers.get(state.jobId);
+        if (cancelTimer) clearTimeout(cancelTimer);
+        cancelTimers.delete(state.jobId);
         scheduler.complete(state.jobId, state.status);
         workerProcesses.delete(state.jobId);
         continue;
@@ -150,6 +199,35 @@ async function main() {
     child.unref();
   };
 
+  const scheduleCancelEscalation = state => {
+    if (cancelTimers.has(state.jobId)) return;
+    const identity = {
+      generation: Number(state.generation),
+      pid: Number(state.pid),
+      nonce: state.nonce,
+    };
+    if (!identity.pid || !identity.nonce) return;
+    const timer = setTimeout(() => {
+      cancelTimers.delete(state.jobId);
+      const latest = stateFor({ jobId: state.jobId });
+      if (!latest || ["completed", "cancelled", "failed"].includes(latest.status)) return;
+      if (Number(latest.generation) !== identity.generation
+        || Number(latest.pid) !== identity.pid
+        || latest.nonce !== identity.nonce) return;
+      const managed = workerProcesses.get(state.jobId);
+      const managedIdentityMatches = managed
+        && managed.generation === identity.generation
+        && managed.nonce === identity.nonce
+        && managed.child.pid === identity.pid
+        && managed.child.exitCode === null;
+      const commandLine = managedIdentityMatches ? identity.nonce : readProcessCommandLine(identity.pid);
+      if (!commandLine?.includes(identity.nonce)) return;
+      try { terminateProcessTree(identity.pid); } catch { /* refresh records cancellation if it exited */ }
+      setTimeout(refreshScheduler, 50);
+    }, configuredCancelGrace());
+    cancelTimers.set(state.jobId, timer);
+  };
+
   scheduler = new JobScheduler({ concurrency: configuredConcurrency(), spawnJob });
   scheduler.restore(recoveredJobs);
   refreshTimer = setInterval(refreshScheduler, 100);
@@ -163,6 +241,8 @@ async function main() {
       if (retry.timer) clearTimeout(retry.timer);
     }
     retryTimers.clear();
+    for (const timer of cancelTimers.values()) clearTimeout(timer);
+    cancelTimers.clear();
     if (server) await server.close();
     releaseStartupLock(runtimeDir, nonce);
   };
@@ -179,6 +259,17 @@ async function main() {
           };
         case "submit": {
           const request = { ...message.params };
+          const sessionJobs = recoverJobs(runtimeDir)
+            .filter(job => job.sessionId === request.sessionId);
+          const activeSessionJob = sessionJobs.find(job =>
+            !["completed", "cancelled", "failed"].includes(job.status));
+          if (request.command === "start" && activeSessionJob) {
+            const error = new Error(
+              `Session ${request.sessionId} already has active job ${activeSessionJob.jobId}`,
+            );
+            error.code = "SESSION_BUSY";
+            throw error;
+          }
           if (request.command === "follow-up" && !request.threadId) {
             const previous = stateFor({ sessionId: request.sessionId });
             if (!previous?.threadId || previous.status !== "completed") {
@@ -224,6 +315,7 @@ async function main() {
           appendEvent(state.supervisorEventsPath, {
             type: disposition === "queued" ? "cancelled" : "cancel_requested",
           });
+          if (disposition === "active") scheduleCancelEscalation(state);
           return { ...state, status: "cancelled", cancelRequested: true };
         }
         case "shutdown-if-idle": {

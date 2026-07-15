@@ -89,3 +89,24 @@ test("the supervisor dispatches isolated jobs with FIFO overflow", async t => {
   }
   assert.equal(existsSync(join(runtimeDir, "broker.port")), false);
 });
+
+test("the supervisor rejects a second active start for the same session", async t => {
+  const runtimeDir = tempRuntime();
+  const supervisor = startSupervisor(runtimeDir, { FAKE_TURN_DELAY_MS: "2000" });
+  t.after(async () => {
+    try {
+      const jobs = await requestRuntime("list", {}, { runtimeDir });
+      for (const job of [...jobs.active, ...jobs.queued]) {
+        await requestRuntime("cancel", { jobId: job.jobId }, { runtimeDir });
+      }
+    } catch { /* already gone */ }
+    if (supervisor.exitCode === null) supervisor.kill();
+  });
+  await waitUntil(async () => existsSync(runtimePaths(runtimeDir).endpointFile), Boolean);
+
+  await requestRuntime("submit", submission("same-session", join(runtimeDir, "first.txt")), { runtimeDir });
+  await assert.rejects(
+    requestRuntime("submit", submission("same-session", join(runtimeDir, "second.txt")), { runtimeDir }),
+    error => error.code === "SESSION_BUSY",
+  );
+});

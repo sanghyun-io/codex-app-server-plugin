@@ -52,6 +52,7 @@ export class AppServerClient {
     this.handlers = new Map();
     this.disconnectHandlers = new Set();
     this.generation = 0;
+    this.disconnectedGeneration = 0;
     this.closed = false;
   }
 
@@ -65,6 +66,17 @@ export class AppServerClient {
         windowsHide: true,
       });
       this.proc = proc;
+      this.disconnectedGeneration = 0;
+      const streamError = error => {
+        if (this.proc !== proc || this.generation !== generation) return;
+        this.#disconnect(
+          new AppServerError(6, `App server stream error: ${error?.message || error}`, null, true),
+          generation,
+        );
+      };
+      proc.stdin.on("error", streamError);
+      proc.stdout.on("error", streamError);
+      proc.stderr.on("error", streamError);
       proc.stderr.on("data", () => {});
       proc.once("spawn", () => {
         if (settled || this.proc !== proc || this.generation !== generation) return;
@@ -93,7 +105,14 @@ export class AppServerClient {
         if (this.rl !== rl || this.generation !== generation) return;
         let message;
         try { message = JSON.parse(line); } catch { return; }
-        this.#handleMessage(message);
+        try {
+          this.#handleMessage(message);
+        } catch (error) {
+          this.#disconnect(
+            new AppServerError(6, `App server notification handler failed: ${error?.message || error}`, null, true),
+            generation,
+          );
+        }
       });
       rl.on("error", error => {
         if (this.rl === rl && this.generation === generation) {
@@ -120,7 +139,8 @@ export class AppServerClient {
   }
 
   #disconnect(error, generation) {
-    if (this.closed || generation !== this.generation) return;
+    if (this.closed || generation !== this.generation || this.disconnectedGeneration === generation) return;
+    this.disconnectedGeneration = generation;
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
     for (const handler of this.disconnectHandlers) handler(error);
@@ -138,8 +158,14 @@ export class AppServerClient {
   }
 
   send(message) {
-    if (!this.proc?.stdin?.writable) throw new AppServerError(6, "App server process not running");
-    this.proc.stdin.write(`${JSON.stringify(message)}\n`);
+    if (!this.proc?.stdin?.writable) {
+      throw new AppServerError(6, "App server process not running", null, true);
+    }
+    const generation = this.generation;
+    this.proc.stdin.write(`${JSON.stringify(message)}\n`, error => {
+      if (!error) return;
+      this.#disconnect(new AppServerError(6, `App server write failed: ${error.message}`, null, true), generation);
+    });
   }
 
   request(method, params = {}, timeoutMs = INIT_TIMEOUT_MS) {
@@ -147,7 +173,7 @@ export class AppServerClient {
     return new Promise((resolvePromise, rejectPromise) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        rejectPromise(new AppServerError(5, `Request ${method} timed out after ${timeoutMs}ms`));
+        rejectPromise(new AppServerError(5, `Request ${method} timed out after ${timeoutMs}ms`, null, true));
       }, timeoutMs);
       this.pending.set(id, {
         resolve: result => { clearTimeout(timer); resolvePromise(result); },

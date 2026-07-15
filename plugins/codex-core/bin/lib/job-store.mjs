@@ -79,6 +79,17 @@ export function appendEvent(path, event) {
   return record;
 }
 
+export function appendEventBestEffort(path, event, options = {}) {
+  const append = options.append || appendEvent;
+  try {
+    append(path, event);
+    return true;
+  } catch (error) {
+    options.onError?.(error);
+    return false;
+  }
+}
+
 export function createJob(runtimeDir, request, options = {}) {
   const jobId = options.jobId || `job_${Date.now()}_${randomBytes(6).toString("hex")}`;
   const jobDir = join(runtimeDir, "jobs", jobId);
@@ -151,19 +162,33 @@ export function recoverJobs(runtimeDir) {
     .map(entry => {
       const jobDir = join(jobsDir, entry.name);
       const requestPath = join(jobDir, "request.json");
-      const request = JSON.parse(readFileSync(requestPath, "utf8"));
       const supervisorEventsPath = join(jobDir, "supervisor.events.jsonl");
-      return {
-        ...reduceJob(
-          request,
-          readEvents(supervisorEventsPath),
-          attemptEvents(jobDir),
-          existsSync(join(jobDir, "result.txt")),
-        ),
-        jobDir,
-        requestPath,
-        supervisorEventsPath,
-      };
+      try {
+        const request = JSON.parse(readFileSync(requestPath, "utf8"));
+        return {
+          ...reduceJob(
+            request,
+            readEvents(supervisorEventsPath),
+            attemptEvents(jobDir),
+            existsSync(join(jobDir, "result.txt")),
+          ),
+          jobDir,
+          requestPath,
+          supervisorEventsPath,
+        };
+      } catch (error) {
+        return {
+          schemaVersion: 3,
+          jobId: entry.name,
+          status: "failed",
+          generation: 0,
+          corrupt: true,
+          error: `Could not recover ${requestPath}: ${error?.message || error}`,
+          jobDir,
+          requestPath,
+          supervisorEventsPath,
+        };
+      }
     });
 }
 

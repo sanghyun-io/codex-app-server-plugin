@@ -2006,6 +2006,7 @@ async function runV3Command(parsed) {
   } catch (error) {
     if (error?.code === "THREAD_NOT_READY") throw new CodexError(4, error.message);
     if (error?.code === "JOB_NOT_FOUND") throw new CodexError(6, `No session found: ${parsed.sessionId}`);
+    if (error?.code === "SESSION_BUSY") throw new CodexError(6, error.message);
     throw error;
   }
 }

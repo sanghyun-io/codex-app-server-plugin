@@ -34,6 +34,10 @@ const INTERRUPT_DELAY_MS = parseInt(process.env.FAKE_INTERRUPT_DELAY_MS || "0", 
 const FOREIGN_DELTA = !!process.env.FAKE_FOREIGN_DELTA;
 const EXIT_AFTER_FIRST_DELTA = !!process.env.FAKE_EXIT_AFTER_FIRST_DELTA;
 const EXIT_ONCE_FILE = process.env.FAKE_EXIT_ONCE_FILE || "";
+const HANG_METHOD = process.env.FAKE_HANG_METHOD || "";
+const INITIALIZE_DELAY_MS = parseInt(process.env.FAKE_INITIALIZE_DELAY_MS || "0", 10);
+const PID_FILE = process.env.FAKE_PID_FILE || "";
+if (PID_FILE) writeFileSync(PID_FILE, `${process.pid}\n`, "utf8");
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -70,10 +74,13 @@ function recordInterrupt(params) {
 function handleRequest(msg) {
   const { method, id, params } = msg;
   recordRequest(msg);
+  if (method === HANG_METHOD) return;
 
   switch (method) {
     case "initialize":
-      send({ id, result: { serverInfo: { name: "fake-codex", version: "0.0.1" } } });
+      setTimeout(() => {
+        send({ id, result: { serverInfo: { name: "fake-codex", version: "0.0.1" } } });
+      }, INITIALIZE_DELAY_MS);
       break;
 
     case "account/read":

@@ -165,3 +165,39 @@ test("a durable cancel request survives supervisor replacement", async t => {
   }, Boolean);
   assert.equal(existsSync(outputPath), false);
 });
+
+test("cancellation force-terminates a nonce-matched worker stuck during initialization", async t => {
+  const runtimeDir = tempRuntime();
+  const outputPath = join(runtimeDir, "cancel-init.txt");
+  const requestLog = join(runtimeDir, "requests.jsonl");
+  const appServerPidFile = join(runtimeDir, "app-server.pid");
+  const supervisor = launch(runtimeDir, {
+    CODEX_REVIEW_CANCEL_GRACE_MS: "100",
+    FAKE_INITIALIZE_DELAY_MS: "5000",
+    FAKE_REQUEST_LOG: requestLog,
+    FAKE_PID_FILE: appServerPidFile,
+  });
+  t.after(() => { if (supervisor.exitCode === null) supervisor.kill(); });
+  await ready(runtimeDir);
+  const submitted = await requestRuntime("submit", request("cancel-init-session", outputPath), { runtimeDir });
+
+  await waitUntil(
+    async () => existsSync(requestLog) ? readFileSync(requestLog, "utf8") : "",
+    value => value.includes('"method":"initialize"'),
+  );
+  const starting = await requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir });
+  await requestRuntime("cancel", { jobId: submitted.jobId }, { runtimeDir });
+  await waitUntil(
+    () => requestRuntime("status", { jobId: submitted.jobId }, { runtimeDir }),
+    value => value?.status === "cancelled",
+    3_000,
+  );
+  await waitUntil(async () => {
+    try { process.kill(starting.pid, 0); return false; } catch { return true; }
+  }, Boolean, 3_000);
+  const appServerPid = Number(readFileSync(appServerPidFile, "utf8").trim());
+  await waitUntil(async () => {
+    try { process.kill(appServerPid, 0); return false; } catch { return true; }
+  }, Boolean, 3_000);
+  assert.equal(existsSync(outputPath), false);
+});

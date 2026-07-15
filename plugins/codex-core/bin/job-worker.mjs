@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { AppServerClient, AppServerError } from "./lib/app-server-client.mjs";
 import {
   appendEvent,
+  appendEventBestEffort,
   appendOutput,
   createAttempt,
   jobPaths,
@@ -51,11 +52,22 @@ async function main() {
   let charsReceived = 0;
   let threadId = request.threadId || null;
   let turnId = null;
+  const ensureNotCancelled = () => {
+    if (!existsSync(paths.cancelPath)) return;
+    const error = new AppServerError(8, "Job cancelled");
+    error.cancelled = true;
+    throw error;
+  };
   try {
+    ensureNotCancelled();
     await client.spawn();
+    ensureNotCancelled();
     await client.initialize();
+    ensureNotCancelled();
     await client.checkAuth();
+    ensureNotCancelled();
     const models = await client.listModels();
+    ensureNotCancelled();
     if (models && !models.includes(request.model)) {
       throw new AppServerError(6, `Model '${request.model}' is unavailable. Available models: ${models.join(", ")}`);
     }
@@ -67,6 +79,7 @@ async function main() {
       threadId = thread?.thread?.id;
       if (!threadId) throw new AppServerError(6, "Thread start returned no thread id");
     }
+    ensureNotCancelled();
 
     const result = await client.startTurn(threadId, request.prompt, {
       model: request.model,
@@ -83,12 +96,14 @@ async function main() {
           turnId,
         });
         checkpointTimer = setInterval(() => {
-          appendEvent(attempt.eventsPath, {
+          appendEventBestEffort(attempt.eventsPath, {
             type: "checkpoint",
             generation: parsed.generation,
             threadId,
             turnId,
             charsReceived,
+          }, {
+            onError: error => console.error(`[job-worker] checkpoint skipped: ${error?.message || error}`),
           });
         }, 3_000);
       },
@@ -129,6 +144,17 @@ async function main() {
     process.exit(0);
   } catch (error) {
     if (checkpointTimer) clearInterval(checkpointTimer);
+    if (error?.cancelled || existsSync(paths.cancelPath)) {
+      appendEvent(attempt.eventsPath, {
+        type: "cancelled",
+        generation: parsed.generation,
+        threadId,
+        turnId,
+        charsReceived,
+      });
+      client.close();
+      process.exit(8);
+    }
     appendEvent(attempt.eventsPath, {
       type: error?.retryable ? "recoverable_failure" : "failed",
       generation: parsed.generation,

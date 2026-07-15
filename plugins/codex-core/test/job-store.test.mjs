@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -156,4 +156,33 @@ test("recoverJobs rebuilds queued and completed jobs", () => {
     ["job-queued", "queued"],
   ]);
   assert.equal(queued.jobId, "job-queued");
+});
+
+test("recoverJobs quarantines one corrupt job without hiding healthy jobs", () => {
+  const runtime = tempRuntime();
+  createJob(runtime, request(), { jobId: "job-healthy" });
+  const corruptDir = join(runtime, "jobs", "job-corrupt");
+  mkdirSync(corruptDir, { recursive: true });
+  writeFileSync(join(corruptDir, "request.json"), '{"schemaVersion":3', "utf8");
+
+  const states = recoverJobs(runtime);
+  const healthy = states.find(state => state.jobId === "job-healthy");
+  const corrupt = states.find(state => state.jobId === "job-corrupt");
+
+  assert.equal(healthy.status, "queued");
+  assert.equal(corrupt.status, "failed");
+  assert.equal(corrupt.corrupt, true);
+  assert.match(corrupt.error, /request\.json|JSON|Unexpected/i);
+});
+
+test("best-effort events isolate ancillary write failures", async () => {
+  const { appendEventBestEffort } = await import("../bin/lib/job-store.mjs");
+  const errors = [];
+  const written = appendEventBestEffort("ignored", { type: "checkpoint" }, {
+    append: () => { throw Object.assign(new Error("temporarily locked"), { code: "EPERM" }); },
+    onError: error => errors.push(error),
+  });
+
+  assert.equal(written, false);
+  assert.equal(errors[0].code, "EPERM");
 });
