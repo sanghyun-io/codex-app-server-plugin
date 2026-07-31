@@ -35,11 +35,11 @@ Version 3 uses a persistent **supervisor with isolated workers**. The supervisor
 
 Each session is bound to the canonical Git project root and sends that same `cwd` to both `thread/start` and `turn/start`. Follow-ups from another project fail before reaching Codex. Progress JSON exposes connection/validation/thread/first-output/streaming phases plus prompt size, first-output latency, received characters, protocol IDs, and reconnect count. Prompts over 131,072 characters are preserved intact and receive a latency warning only.
 
-The model used for each call is configurable (priority: CLI flag > env var > workflow default > wrapper default `gpt-5.6-terra`):
+The model and reasoning effort used for each call are configurable. Model priority is CLI flag > env var > workflow default > wrapper default `gpt-5.6-terra`; effort defaults to `high`:
 
 ```bash
 # CLI flag
-node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-5.6-sol
+node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-5.6-sol --effort max
 
 # Environment variable
 CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
@@ -137,15 +137,16 @@ With `codex-delegation.md` imported (auto-activated on install), Claude routes C
 | "Codex 지금 거 중단해" / "Stop the Codex session" | `halt` |
 | "Codex 그 결과 다시 보여줘" / "Show me that Codex output" | `readout` |
 | "Codex에게 **gpt-5.6-sol로** 부탁" / "Have Codex **with gpt-5.6-sol**" | (any) `--model gpt-5.6-sol` |
+| "Codex에게 **gpt-5.6-sol max 로** 부탁" / "Have Codex **with gpt-5.6-sol at max effort**" | (any) `--model gpt-5.6-sol --effort max` |
 | "**o1 써서** 검토" / "Ask Codex **using o1**" | (any) `--model o1` |
 
 If the intent is ambiguous, Claude asks with an `AskUserQuestion` prompt instead of guessing.
 
 Code review intents (`/codex-code-review:code-review`, `/codex-code-review:red-review`) only route correctly when `codex-code-review` is installed.
 
-### Model Override
+### Model and Effort Override
 
-Every Codex-backed skill accepts `--model <name>`. Priority:
+Every Codex-backed skill accepts `--model <name>` and `--effort <level>`. Model priority:
 
 1. `--model <name>` CLI flag (highest)
 2. `CODEX_REVIEW_MODEL` environment variable
@@ -161,7 +162,9 @@ Every Codex-backed skill accepts `--model <name>`. Priority:
 
 Before creating or resuming a thread, the wrapper checks `model/list` for the authenticated account. If a requested model is unavailable, it exits without fallback and prints the available model names. Existing sessions keep their stored model across follow-up turns.
 
-Recognized prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
+Recognized effort values are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Natural-language forms such as `gpt-5.6-sol max 로`, `at max effort`, and `reasoning effort ultra` become `--effort` arguments. The selected effort is reused on follow-up turns until explicitly changed.
+
+Recognized model prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 
 ### A+ Delegation Pattern
 
@@ -178,7 +181,7 @@ This keeps file writes under Claude's tool-permission control while letting Code
 
 ```
 /codex-core:delegate Fix the null pointer in UserService.login
-/codex-core:delegate Refactor auth middleware to use JWT --model gpt-5.6-sol
+/codex-core:delegate Refactor auth middleware to use JWT --model gpt-5.6-sol --effort max
 /codex-core:delegate Why is /api/v1/users returning 500 --read-only
 
 /codex-core:sessions            # List all sessions
@@ -217,7 +220,7 @@ The install hook adds a separate marker block (`<!-- @codex-code-review:begin --
 /codex-code-review:code-review                  # Current branch vs default branch
 /codex-code-review:code-review PR#123           # Review a specific PR
 /codex-code-review:code-review --base main      # Review against a specific base
-/codex-code-review:code-review --model gpt-5.6-sol   # Override Codex model
+/codex-code-review:code-review --model gpt-5.6-sol --effort max   # Override Codex model/effort
 /codex-code-review:code-review --with-opus      # Add Claude Opus cross-validation
 ```
 
@@ -226,7 +229,7 @@ The install hook adds a separate marker block (`<!-- @codex-code-review:begin --
 ```
 /codex-code-review:red-review                   # Adversarial review of current branch
 /codex-code-review:red-review PR#123            # Adversarial review of a PR
-/codex-code-review:red-review --model o1        # Override Codex model
+/codex-code-review:red-review --model gpt-5.6-sol --effort ultra  # Override Codex model/effort
 /codex-code-review:red-review --with-opus       # Add Claude Opus cross-validation
 ```
 

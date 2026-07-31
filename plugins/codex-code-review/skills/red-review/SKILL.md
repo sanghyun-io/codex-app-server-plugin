@@ -1,7 +1,7 @@
 ---
 name: red-review
-description: Adversarial security-focused code review using Codex. Unlike the default code-review, this prompt instructs Codex to act as an attacker hunting for vulnerabilities, auth bypasses, race conditions, injection flaws, and data leakage paths.
-argument-hint: "[PR#N | --base <ref>] [--model <name>] [--with-opus]"
+description: Use when reviewing code from an adversarial security perspective for vulnerabilities, auth bypasses, races, injection flaws, or data leakage.
+argument-hint: "[PR#N | --base <ref>] [--model <name>] [--effort <level>] [--with-opus]"
 invocation:
   command: red-review
   user_invocable: true
@@ -19,6 +19,7 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 - `PR#N` — Review PR number N via `gh pr diff N`
 - `--base <ref>` — Review against a specific base ref
 - `--model <name>` — Override Codex model (workflow default: `gpt-5.6-sol`, env: `CODEX_REVIEW_MODEL`)
+- `--effort <level>` — Override reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default: `high`)
 - `--with-opus` — Enable Opus cross-validation after Codex review
 
 ## Examples
@@ -26,7 +27,7 @@ Follow the complete workflow defined in `~/.claude/rules/codex-red-review.md`.
 ```
 /codex-code-review:red-review
 /codex-code-review:red-review PR#123
-/codex-code-review:red-review --base develop --model gpt-5.6-terra
+/codex-code-review:red-review --base develop --model gpt-5.6-terra --effort max
 /codex-code-review:red-review --with-opus
 ```
 
@@ -47,3 +48,7 @@ When you relay the security findings back to the user, use plain, easy words —
 - Explain severity in plain words about the real danger ("이건 뚫리면 실제로 데이터가 새거나 계정이 털릴 수 있음" vs "이론상 가능하지만 실제로 악용되긴 어려움"), not just the HIGH/MED/LOW label.
 - Keep the deep technical detail available, but only show it when the user asks ("자세히 보여줘").
 - Always write the final report to the user in Korean.
+
+## References
+
+- `~/.claude/rules/codex-red-review.md` — Read whenever executing this adversarial review workflow.

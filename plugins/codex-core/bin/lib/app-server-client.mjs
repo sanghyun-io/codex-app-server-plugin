@@ -189,7 +189,7 @@ export class AppServerClient {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review", title: "Codex Review", version: "3.0.0" },
+      clientInfo: { name: "codex_review", title: "Codex Review", version: "3.0.1" },
     });
     this.send({ method: "initialized", params: {} });
     return result;

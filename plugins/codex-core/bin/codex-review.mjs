@@ -12,6 +12,7 @@
  *
  * Options:
  *   --model <MODEL>       Model override (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
+ *   --effort <LEVEL>      Reasoning effort override (default: high)
  *   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
  *   --foreground          Run synchronously (v1 compat, no background worker)
  *   --stdin               Read prompt from stdin and write to <prompt-file> (avoids Write tool permission)
@@ -46,6 +47,7 @@ import { ensureSupervisor, requestRuntime } from "./lib/runtime-ipc.mjs";
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
+const DEFAULT_EFFORT = "high";
 const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
@@ -264,7 +266,7 @@ class AppServerClient {
 
   async initialize() {
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_review", title: "Codex Review", version: "3.0.0" },
+      clientInfo: { name: "codex_review", title: "Codex Review", version: "3.0.1" },
     });
     this.notify("initialized");
     return result;
@@ -1236,7 +1238,10 @@ async function validateModelAvailability(client, model) {
 // ---------------------------------------------------------------------------
 
 async function workerMain(parsed) {
-  const { command, positional, sessionId, reviewDir, projectRoot, model, modelExplicit, timeout } = parsed;
+  const {
+    command, positional, sessionId, reviewDir, projectRoot,
+    model, modelExplicit, effort, effortExplicit, timeout,
+  } = parsed;
   const promptFile = resolve(positional[0]);
   const outputFile = resolve(positional[1]);
   const promptText = readFileSync(promptFile, "utf8");
@@ -1300,6 +1305,7 @@ async function workerMain(parsed) {
 
     let threadId;
     let effectiveModel = model;
+    let effectiveEffort = effort;
     let state = null;
 
     if (command !== "start") {
@@ -1319,6 +1325,9 @@ async function workerMain(parsed) {
         ].join("\n"));
       }
       effectiveModel = modelExplicit ? model : (state.model || model || DEFAULT_MODEL);
+      effectiveEffort = effortExplicit
+        ? effort
+        : (state.effort || effort || DEFAULT_EFFORT);
     }
 
     progress("validating_model", { model: effectiveModel });
@@ -1333,6 +1342,7 @@ async function workerMain(parsed) {
       saveState(reviewDir, sessionId, {
         threadId,
         model: effectiveModel,
+        effort: effectiveEffort,
         projectRoot,
         createdAt: new Date().toISOString(),
         turnCount: 0,
@@ -1352,11 +1362,12 @@ async function workerMain(parsed) {
     }, PROGRESS_INTERVAL_MS);
 
     // Execute turn
-    log(`Starting turn (model: ${effectiveModel})`);
+    log(`Starting turn (model: ${effectiveModel}, effort: ${effectiveEffort})`);
     let turnResult;
     try {
       turnResult = await client.startTurn(threadId, promptText, {
         model: effectiveModel,
+        effort: effectiveEffort,
         cwd: projectRoot,
         timeout: hardTimeout,
         onDelta: (chars) => {
@@ -1418,6 +1429,7 @@ async function workerMain(parsed) {
     const updatedState = loadState(reviewDir, sessionId);
     if (updatedState) {
       updatedState.turnCount = (updatedState.turnCount || 0) + 1;
+      updatedState.effort = effectiveEffort;
       saveState(reviewDir, sessionId, updatedState);
     }
 
@@ -1471,7 +1483,10 @@ async function workerMain(parsed) {
 // ---------------------------------------------------------------------------
 
 function spawnWorker(parsed) {
-  const { command, positional, sessionId, reviewDir, projectRoot, model, modelExplicit, defaultModel, timeout } = parsed;
+  const {
+    command, positional, sessionId, reviewDir, projectRoot,
+    model, modelExplicit, effort, effortExplicit, defaultModel, timeout,
+  } = parsed;
 
   // Check if a worker is already running for this session
   const existing = readPidFile(reviewDir, sessionId);
@@ -1512,6 +1527,9 @@ function spawnWorker(parsed) {
   ];
   if (modelExplicit) {
     workerArgs.push("--model", model);
+  }
+  if (effortExplicit) {
+    workerArgs.push("--effort", effort);
   }
   if (defaultModel) {
     workerArgs.push("--default-model", defaultModel);
@@ -1928,7 +1946,8 @@ async function v3StartOrFollowUp(parsed) {
     outputPath: resolve(parsed.positional[1]),
     model: parsed.model,
     modelExplicit: parsed.modelExplicit,
-    effort: "high",
+    effort: parsed.effort,
+    effortExplicit: parsed.effortExplicit,
     timeoutMs: parsed.timeout,
     projectRoot: parsed.projectRoot,
     ownerSessionId: process.env.CODEX_REVIEW_OWNER_SESSION || null,
@@ -2029,6 +2048,7 @@ Usage:
 
 Options:
   --model <MODEL>       Model to use (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
+  --effort <LEVEL>      Reasoning effort to use (default: high)
   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
   --foreground          Run synchronously (v1 compat)
   --stdin               Read prompt from stdin, write to <prompt-file>
@@ -2066,6 +2086,7 @@ function parseArgs(argv) {
   let reviewDir = null;
   let cwd = null;
   let model = null;
+  let effort = null;
   let defaultModel = null;
   let timeout = null;
   let nonce = null;
@@ -2082,6 +2103,8 @@ function parseArgs(argv) {
       cwd = raw[++i];
     } else if (raw[i] === "--model" && raw[i + 1]) {
       model = raw[++i];
+    } else if (raw[i] === "--effort" && raw[i + 1]) {
+      effort = raw[++i];
     } else if (raw[i] === "--default-model" && raw[i + 1]) {
       defaultModel = raw[++i];
     } else if (raw[i] === "--timeout" && raw[i + 1]) {
@@ -2107,6 +2130,8 @@ function parseArgs(argv) {
       projectRoot: resolveProjectRoot(cwd || process.cwd()),
       model: model || process.env.CODEX_REVIEW_MODEL || defaultModel || DEFAULT_MODEL,
       modelExplicit: model !== null,
+      effort: effort || DEFAULT_EFFORT,
+      effortExplicit: effort !== null,
       defaultModel,
       timeout: DEFAULT_HARD_TIMEOUT_MS,
       nonce,
@@ -2142,6 +2167,8 @@ function parseArgs(argv) {
     projectRoot,
     model: resolvedModel,
     modelExplicit: model !== null,
+    effort: effort || DEFAULT_EFFORT,
+    effortExplicit: effort !== null,
     defaultModel,
     timeout: resolvedTimeout,
     nonce,

@@ -26,10 +26,10 @@ triggers:
 | Order | Action |
 |:-----:|--------|
 | 1 | 발화에서 **핵심 동사**와 **대상**을 추출한다 |
-| 2 | **모델명 추출** — `{모델}(으)로`, `with {model}` 등 패턴 매칭 (없으면 스킵) |
+| 2 | **모델명 + effort 추출** — `{모델} {effort}(으)로`, `with {model} at {effort} effort` 등 패턴 매칭 (각각 없으면 스킵) |
 | 3 | 아래 **의도 분류 표**로 스킬을 선택한다 |
 | 4 | 복수 의도로 해석될 수 있으면 **AskUserQuestion**으로 확정한다 (추측 금지) |
-| 5 | 선택한 스킬을 실행한다 — 추출된 모델이 있으면 `--model <X>` 인수로 자동 부착 (스킬 내부 절차는 해당 SKILL.md 참조) |
+| 5 | 선택한 스킬을 실행한다 — 추출된 모델은 `--model <X>`, effort는 `--effort <Y>` 인수로 자동 부착 (스킬 내부 절차는 해당 SKILL.md 참조) |
 
 ---
 
@@ -182,6 +182,7 @@ Claude: codex-review close로 Thread 종료
 | 발화 | 라우팅 |
 |------|--------|
 | "Codex에게 gpt-5.6-sol로 리뷰 부탁해" | `/code-review --model gpt-5.6-sol` |
+| "Codex에게 gpt-5.6-sol max 로 이 버그 고쳐달라고 해" | `/delegate "이 버그 고쳐줘" --model gpt-5.6-sol --effort max` |
 | "Codex로 o1 써서 보안 검토" | `/red-review --model o1` |
 | "Have Codex fix the bug using gpt-5.6-terra" | `/delegate "fix the bug" --model gpt-5.6-terra` |
 | "gpt-5.6-luna 모델로 이 함수 왜 느린지 물어봐" | `/delegate "이 함수 왜 느린지" --read-only --model gpt-5.6-luna` |
@@ -195,6 +196,35 @@ Claude: codex-review close로 Thread 종료
 | 추출된 모델이 prefix는 맞지만 형식 의심 | 일단 부착하고 App Server 거부 시 사용자에게 재질의 |
 | 사용자가 슬래시 커맨드로 직접 `--model X`, 발화에서 다른 모델 언급 | 슬래시 커맨드 우선 (사용자 명시) |
 | 세션 진행 중 다른 모델 언급 | **새 세션 시작** (기존 Thread는 모델 고정 — `state.json`에 저장됨) |
+
+---
+
+## 추론 effort 의도 추출
+
+발화에서 추론 강도를 모델명과 독립적으로 추출하여 `--effort <level>`로 주입한다.
+인식 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`이다.
+
+### 추출 패턴
+
+| 패턴 | 예시 발화 | 라우팅 인수 |
+|------|-----------|-------------|
+| `{모델} {effort}(으)로` | "gpt-5.6-sol max 로 이 버그 고쳐줘" | `--model gpt-5.6-sol --effort max` |
+| `{effort} effort로` | "max effort로 Codex에게 검토시켜" | `--effort max` |
+| `추론 강도 {effort}` | "Codex 추론 강도 ultra로 분석해" | `--effort ultra` |
+| `at {effort} effort` | "Have Codex fix it at max effort" | `--effort max` |
+| `reasoning effort {effort}` | "Use reasoning effort xhigh" | `--effort xhigh` |
+
+`max로`처럼 effort 토큰에 한국어 조사가 붙어도 분리해서 인식한다. 단, Codex 위임
+문맥이 아니거나 토큰이 일반 형용사로 쓰인 경우에는 effort로 추정하지 않는다.
+
+### 모호 / 충돌 처리
+
+| 상황 | 처리 |
+|------|------|
+| effort가 발화에 없음 | `--effort` 미부착 (wrapper 기본값 `high`) |
+| effort 후보가 2개 이상 | AskUserQuestion으로 사용자 확인 |
+| 슬래시 커맨드의 `--effort X`와 자연어 effort가 충돌 | 슬래시 커맨드 값 우선 |
+| follow-up에서 다른 effort 명시 | 같은 세션의 해당 turn부터 새 effort를 사용하고 이후 follow-up에도 유지 |
 
 ---
 

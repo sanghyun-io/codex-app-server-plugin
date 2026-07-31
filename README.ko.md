@@ -35,11 +35,11 @@ Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
 
 각 세션은 canonical Git 프로젝트 루트에 고정되며 동일한 `cwd`가 `thread/start`와 `turn/start`에 전달됩니다. 다른 프로젝트에서 follow-up하면 Codex 호출 전에 실패합니다. progress JSON에는 연결/모델 검증/thread 시작/최초 출력 대기/스트리밍 단계와 프롬프트 크기, 최초 출력 지연, 수신 글자 수, protocol ID, 재접속 횟수가 기록됩니다. 131,072자를 초과하는 프롬프트는 자르지 않고 그대로 전달하며 지연 경고만 남깁니다.
 
-호출별 모델은 변경 가능합니다 (우선순위: CLI 플래그 > 환경변수 > 워크플로 기본값 > wrapper 기본값 `gpt-5.6-terra`):
+호출별 모델과 추론 effort를 변경할 수 있습니다. 모델 우선순위는 CLI 플래그 > 환경변수 > 워크플로 기본값 > wrapper 기본값 `gpt-5.6-terra`이며, effort 기본값은 `high`입니다:
 
 ```bash
 # CLI 플래그
-node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-5.6-sol
+node codex-review.mjs start prompt.txt out.txt --session s1 --review-dir /tmp --model gpt-5.6-sol --effort max
 
 # 환경변수
 CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
@@ -137,15 +137,16 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 | "Codex 지금 거 중단해" / "Stop the Codex session" | `halt` |
 | "Codex 그 결과 다시 보여줘" / "Show me that Codex output" | `readout` |
 | "Codex에게 **gpt-5.6-sol로** 부탁" / "Have Codex **with gpt-5.6-sol**" | (모든 의도) `--model gpt-5.6-sol` |
+| "Codex에게 **gpt-5.6-sol max 로** 부탁" / "Have Codex **with gpt-5.6-sol at max effort**" | (모든 의도) `--model gpt-5.6-sol --effort max` |
 | "**o1 써서** 검토" / "Ask Codex **using o1**" | (모든 의도) `--model o1` |
 
 의도가 모호하면 Claude는 추측 대신 `AskUserQuestion`으로 확인을 받습니다.
 
 코드 리뷰 의도(`/codex-code-review:code-review`, `/codex-code-review:red-review`)는 `codex-code-review`가 설치되어 있을 때만 정확히 라우팅됩니다.
 
-### 모델 오버라이드
+### 모델 및 effort 오버라이드
 
-모든 Codex 기반 스킬은 `--model <name>`을 받습니다. 우선순위:
+모든 Codex 기반 스킬은 `--model <name>`과 `--effort <level>`을 받습니다. 모델 우선순위:
 
 1. `--model <name>` CLI 플래그 (최우선)
 2. `CODEX_REVIEW_MODEL` 환경변수
@@ -161,7 +162,9 @@ CODEX_REVIEW_MODEL=gpt-5.6-luna node codex-review.mjs start ...
 
 Wrapper는 thread를 생성하거나 resume하기 전에 인증 계정의 `model/list`를 확인합니다. 요청 모델을 사용할 수 없으면 fallback하지 않고 종료하며 사용 가능한 모델명을 출력합니다. 기존 세션은 follow-up에서도 저장된 모델을 유지합니다.
 
-자연어 추출 시 인식되는 prefix: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. 선택된 모델은 thread의 `state.json`에 저장되어 follow-up turn에서 자동 재사용됩니다.
+effort 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`를 인식합니다. 자연어에서는 `gpt-5.6-sol max 로`, `max effort로`, `추론 강도 ultra` 같은 표현을 `--effort`로 변환합니다. 선택된 effort는 후속 turn에서도 자동 재사용되며 새 값을 명시하면 그 turn부터 변경됩니다.
+
+자연어 모델 추출 시 인식되는 prefix: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. 선택된 모델은 thread의 `state.json`에 저장되어 follow-up turn에서 자동 재사용됩니다.
 
 ### A+ 위임 패턴
 
@@ -178,7 +181,7 @@ Wrapper는 thread를 생성하거나 resume하기 전에 인증 계정의 `model
 
 ```
 /codex-core:delegate Fix the null pointer in UserService.login
-/codex-core:delegate Refactor auth middleware to use JWT --model gpt-5.6-sol
+/codex-core:delegate Refactor auth middleware to use JWT --model gpt-5.6-sol --effort max
 /codex-core:delegate Why is /api/v1/users returning 500 --read-only
 
 /codex-core:sessions            # 모든 세션 목록
@@ -217,7 +220,7 @@ Install hook이 `~/.claude/CLAUDE.md`에 별도 마커 블록(`<!-- @codex-code-
 /codex-code-review:code-review                  # 현재 브랜치 vs default 브랜치
 /codex-code-review:code-review PR#123           # 특정 PR 리뷰
 /codex-code-review:code-review --base main      # 특정 base 기준 리뷰
-/codex-code-review:code-review --model gpt-5.6-sol   # Codex 모델 오버라이드
+/codex-code-review:code-review --model gpt-5.6-sol --effort max   # Codex 모델/effort 오버라이드
 /codex-code-review:code-review --with-opus      # Claude Opus 교차검증 추가
 ```
 
@@ -226,7 +229,7 @@ Install hook이 `~/.claude/CLAUDE.md`에 별도 마커 블록(`<!-- @codex-code-
 ```
 /codex-code-review:red-review                   # 현재 브랜치 공격자 관점 리뷰
 /codex-code-review:red-review PR#123            # PR 공격자 관점 리뷰
-/codex-code-review:red-review --model o1        # Codex 모델 오버라이드
+/codex-code-review:red-review --model gpt-5.6-sol --effort ultra  # Codex 모델/effort 오버라이드
 /codex-code-review:red-review --with-opus       # Claude Opus 교차검증 추가
 ```
 
