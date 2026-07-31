@@ -1,7 +1,7 @@
 ---
 name: code-review
-description: Start a multi-round iterative code review using Codex App Server (default model gpt-5.6-terra). Tracks issues across rounds until convergence. Reviews current branch vs default branch by default.
-argument-hint: "[PR#N | --base <ref>] [--model <name>] [--with-opus]"
+description: Use when reviewing a branch, pull request, or base-ref diff with Codex across one or more review rounds.
+argument-hint: "[PR#N | --base <ref>] [--model <name>] [--effort <level>] [--with-opus]"
 invocation:
   command: code-review
   user_invocable: true
@@ -17,6 +17,7 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 - `PR#N` — Review PR number N via `gh pr diff N`
 - `--base <ref>` — Review against a specific base ref
 - `--model <name>` — Override Codex model (workflow default: `gpt-5.6-terra`, env: `CODEX_REVIEW_MODEL`)
+- `--effort <level>` — Override reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default: `high`)
 - `--with-opus` — Enable Opus cross-validation after Codex review
 
 ## Examples
@@ -24,7 +25,7 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 ```
 /codex-code-review:code-review
 /codex-code-review:code-review PR#123
-/codex-code-review:code-review --base develop --model gpt-5.6-sol
+/codex-code-review:code-review --base develop --model gpt-5.6-sol --effort max
 /codex-code-review:code-review --with-opus
 ```
 
@@ -47,3 +48,7 @@ When you relay review results back to the user, use plain, easy words — not ha
 - Explain severity in plain words about what happens if ignored ("이건 지금 안 고치면 실제로 문제가 생김" vs "당장은 괜찮고 나중에 정리해도 됨"), not just the HIGH/MED/LOW label.
 - Keep the deep technical detail available, but only show it when the user asks ("자세히 보여줘").
 - Always write the final report to the user in Korean.
+
+## References
+
+- `~/.claude/rules/codex-code-review.md` — Read whenever executing this code-review workflow.

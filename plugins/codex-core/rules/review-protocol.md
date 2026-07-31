@@ -19,6 +19,7 @@ Codex를 이용한 리뷰 실행 시 아래 프로토콜을 반드시 따를 것
 | 인증 | ChatGPT 관리형 OAuth (`codex login`으로 사전 인증 필요) |
 | Fallback | 없음 — 실패 시 즉시 PASS |
 | 모델 오버라이드 | `--model <MODEL>` CLI 플래그 또는 `CODEX_REVIEW_MODEL` 환경변수 (wrapper 기본값: `gpt-5.6-terra`, red-review: `gpt-5.6-sol`, read-only delegate: `gpt-5.6-luna`) |
+| 추론 effort 오버라이드 | `--effort <LEVEL>` CLI 플래그 (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`; wrapper 기본값: `high`) |
 | 타임아웃 오버라이드 | `--timeout <MS>` CLI 플래그 또는 `CODEX_REVIEW_TIMEOUT` 환경변수 (기본값: `1800000` / 30분) |
 | 실행 모드 | **비동기** (백그라운드 워커) — `start`/`follow-up`은 즉시 반환, `status`로 폴링 |
 

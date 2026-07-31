@@ -44,6 +44,7 @@ triggers:
 | `PR#N` | `gh pr diff N` |
 | `--base <ref>` | `git diff <ref>...HEAD` |
 | `--model <name>` | Codex 모델 오버라이드 (workflow default: `gpt-5.6-terra`, env: `CODEX_REVIEW_MODEL`) |
+| `--effort <level>` | Codex 추론 강도 오버라이드 (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`; 기본값 `high`) |
 | `--with-opus` | Opus 교차검증 활성화 |
 
 ### Base Commit 기록
@@ -57,20 +58,22 @@ CURRENT_COMMIT=$(git rev-parse HEAD)
 
 ---
 
-## 모델 오버라이드 처리
+## 모델 및 effort 오버라이드 처리
 
 ### $ARGUMENTS 파싱
 
-리뷰 시작 시 `$ARGUMENTS`를 파싱하여 `--model <X>` 인자를 확인한다:
+리뷰 시작 시 `$ARGUMENTS`를 파싱하여 `--model <X>`와 `--effort <level>` 인자를 확인한다:
 
 | 상황 | 처리 |
 |------|------|
 | `--model <X>` 명시 | 모든 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
-| 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
+| `--model` 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
+| `--effort <level>` 명시 | 모든 `codex-review start` 호출에 `--effort "<level>"` 인자 추가 |
+| `--effort` 미명시 | 인자 생략 (wrapper 기본값 `high`) |
 
 ### CLI 명령 형식
 
-review-protocol.md **PHASE 1 Step 2**의 `codex-review start` 명령 끝에 `--model "<X>"`를 추가:
+review-protocol.md **PHASE 1 Step 2**의 `codex-review start` 명령 끝에 지정된 인수를 추가:
 
 ```bash
 node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
@@ -78,12 +81,15 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
   "{HOME_LITERAL}/.claude/tmp/cr_{SID}_r1_output.txt" \
   --session "cr_{SID}" \
   --review-dir "{HOME_LITERAL}/.claude/tmp" \
-  --model "<X>"; echo "EXIT_CODE: $?"
+  --model "<X>" \
+  --effort "<level>"; echo "EXIT_CODE: $?"
 ```
 
 > **follow-up 자동 처리**: `start`에서 지정한 모델은 `cr_{SID}_state.json`에 저장되어
 > 후속 `follow-up` 호출에서 자동 재사용된다. follow-up에 `--model`을 다시 명시할 필요는 없다.
 > 단, 라운드별로 다른 모델을 쓰려면 follow-up에도 `--model <X>`를 추가할 수 있다.
+> `start`에서 지정한 effort도 저장되어 follow-up에서 자동 재사용된다. 라운드별로 바꾸려면
+> follow-up에 `--effort <level>`을 명시한다.
 
 ### 최종 리포트에 모델 표시
 

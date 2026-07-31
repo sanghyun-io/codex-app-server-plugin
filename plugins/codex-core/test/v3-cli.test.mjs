@@ -109,3 +109,71 @@ test("follow-up preserves the v3 thread and project binding", async t => {
   assert.equal(second.status, "completed");
   assert.equal(readFileSync(secondOutput, "utf8"), "v3 cli result");
 });
+
+test("background CLI sends an explicit reasoning effort to turn/start", async t => {
+  const fx = fixture();
+  t.after(async () => {
+    try { await requestRuntime("shutdown-if-idle", {}, { runtimeDir: fx.runtimeDir }); } catch { /* already stopped */ }
+  });
+  const prompt = join(fx.home, "effort.txt");
+  const output = join(fx.home, "effort.out");
+  const requestLog = join(fx.home, "requests.jsonl");
+  fx.env.FAKE_REQUEST_LOG = requestLog;
+  writeFileSync(prompt, "Use maximum reasoning effort.", "utf8");
+
+  const started = cli([
+    "start", prompt, output,
+    "--session", "effort-session",
+    "--review-dir", fx.reviewDir,
+    "--model", "gpt-5.6-sol",
+    "--effort", "max",
+  ], fx.env);
+
+  assert.equal(started.exit, 0, started.stderr);
+  assert.equal((await poll("effort-session", fx.reviewDir, fx.env)).exit, 0);
+  const requests = readFileSync(requestLog, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map(line => JSON.parse(line));
+  const turnStart = requests.find(request => request.method === "turn/start");
+  assert.equal(turnStart?.params?.effort, "max");
+});
+
+test("background follow-up preserves the initial reasoning effort", async t => {
+  const fx = fixture();
+  t.after(async () => {
+    try { await requestRuntime("shutdown-if-idle", {}, { runtimeDir: fx.runtimeDir }); } catch { /* already stopped */ }
+  });
+  const firstPrompt = join(fx.home, "first-effort.txt");
+  const secondPrompt = join(fx.home, "second-effort.txt");
+  const firstOutput = join(fx.home, "first-effort.out");
+  const secondOutput = join(fx.home, "second-effort.out");
+  const requestLog = join(fx.home, "follow-up-requests.jsonl");
+  fx.env.FAKE_REQUEST_LOG = requestLog;
+  writeFileSync(firstPrompt, "Start with maximum reasoning effort.", "utf8");
+  writeFileSync(secondPrompt, "Continue with the same reasoning effort.", "utf8");
+
+  assert.equal(cli([
+    "start", firstPrompt, firstOutput,
+    "--session", "follow-up-effort-session",
+    "--review-dir", fx.reviewDir,
+    "--effort", "max",
+  ], fx.env).exit, 0);
+  assert.equal((await poll("follow-up-effort-session", fx.reviewDir, fx.env)).exit, 0);
+
+  assert.equal(cli([
+    "follow-up", secondPrompt, secondOutput,
+    "--session", "follow-up-effort-session",
+    "--review-dir", fx.reviewDir,
+  ], fx.env).exit, 0);
+  assert.equal((await poll("follow-up-effort-session", fx.reviewDir, fx.env)).exit, 0);
+
+  const requests = readFileSync(requestLog, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map(line => JSON.parse(line));
+  const efforts = requests
+    .filter(request => request.method === "turn/start")
+    .map(request => request.params.effort);
+  assert.deepEqual(efforts, ["max", "max"]);
+});

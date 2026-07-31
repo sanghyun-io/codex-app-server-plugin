@@ -81,6 +81,16 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 > **follow-up 자동 처리**: `start`에서 지정한 모델은 `dg_{SID}_state.json`에 저장되어
 > 후속 `follow-up` 호출에서 자동 재사용된다. follow-up에 `--model`을 다시 명시할 필요는 없다.
 
+### 추론 effort 오버라이드 처리
+
+`$ARGUMENTS`에서 `--effort <level>`을 확인한다. 허용되는 자연어 라우팅 값은
+`low`, `medium`, `high`, `xhigh`, `max`, `ultra`이며, 지정된 값은 Turn 1
+`codex-review start` 호출에 `--effort "<level>"`로 추가한다. 미지정 시 wrapper
+기본값 `high`를 사용한다.
+
+`start`에서 선택한 effort는 세션 상태에 저장되므로 follow-up에 다시 적지 않아도
+유지된다. follow-up에 `--effort`를 명시하면 해당 turn부터 새 값으로 변경된다.
+
 ---
 
 ## Turn 1: 초기 프롬프트
@@ -97,7 +107,7 @@ PROMPT_EOF
 echo "EXIT_CODE: $?"
 ```
 
-`$ARGUMENTS`에 `--read-only`가 있으면 위 명령에 `--default-model "gpt-5.6-luna"`를 추가한다. `$ARGUMENTS`에 `--model <X>`도 있으면 `--model "<X>"`를 함께 추가하며 사용자 지정 모델이 내부 기본값보다 우선한다 (예: `--review-dir "..." --default-model "gpt-5.6-luna" --model "gpt-5.6-sol" <<'PROMPT_EOF'`).
+`$ARGUMENTS`에 `--read-only`가 있으면 위 명령에 `--default-model "gpt-5.6-luna"`를 추가한다. `$ARGUMENTS`에 `--model <X>`도 있으면 `--model "<X>"`를 함께 추가하며 사용자 지정 모델이 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다 (예: `--review-dir "..." --default-model "gpt-5.6-luna" --model "gpt-5.6-sol" --effort "max" <<'PROMPT_EOF'`).
 
 ### Step 2: 폴링
 

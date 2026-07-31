@@ -1,7 +1,7 @@
 ---
 name: delegate
-description: Delegate a coding task (fix, implement, refactor, debug) to Codex using the A+ pattern. Codex analyzes and proposes concrete changes (diff/JSON); Claude applies them with Edit/Write. Multi-turn Thread reuses context so follow-ups only send deltas.
-argument-hint: "<task description> [--model <name>] [--read-only]"
+description: Use when delegating a coding task such as a fix, implementation, refactor, debug investigation, or read-only codebase question to Codex.
+argument-hint: "<task description> [--model <name>] [--effort <level>] [--read-only]"
 invocation:
   command: delegate
   user_invocable: true
@@ -19,13 +19,14 @@ Follow the complete workflow defined in `~/.claude/rules/codex-delegate.md`.
 
 - `<task description>` — Free-form task description (e.g., "Fix the null pointer in UserService.login")
 - `--model <name>` — Override Codex model (default: `gpt-5.6-terra`)
+- `--effort <level>` — Override reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default: `high`)
 - `--read-only` — Question-answer mode using `gpt-5.6-luna` by default; Codex answers without proposing file changes
 
 ## Examples
 
 ```
 /codex-core:delegate Refactor auth middleware to use JWT instead of session tokens
-/codex-core:delegate Find and fix the race condition in OrderService --model gpt-5.6-sol
+/codex-core:delegate Find and fix the race condition in OrderService --model gpt-5.6-sol --effort max
 /codex-core:delegate Why does /api/v1/users return 500 when email is null --read-only
 ```
 
@@ -47,3 +48,7 @@ When you report progress or the final result back to the user, use plain, easy w
 - If something is blocked or failed, say it plainly and clearly state what you need from the user — do not bury it under status codes or jargon.
 - Keep the raw diff / deep technical detail available, but only show it when the user asks ("diff 보여줘", "자세히").
 - Always write the report to the user in Korean.
+
+## References
+
+- `~/.claude/rules/codex-delegate.md` — Read whenever executing this delegation workflow.

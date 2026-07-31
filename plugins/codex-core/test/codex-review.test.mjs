@@ -1375,6 +1375,98 @@ describe("model payload consistency", () => {
   });
 });
 
+describe("reasoning effort payload consistency", () => {
+  it("sends an explicit max effort to turn/start", () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Use maximum reasoning effort.", "utf8");
+
+    const result = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--model", "gpt-5.6-sol",
+      "--effort", "max",
+    ], { requestLog });
+
+    assert.equal(result.exit, 0, result.stderr);
+    const turnStart = readRequests(requestLog)
+      .find(request => request.method === "turn/start");
+    assert.equal(turnStart?.params?.effort, "max");
+  });
+
+  it("preserves the initial effort for a follow-up without an override", () => {
+    const sid = newSid();
+    const firstPrompt = resolve(TEST_DIR, `${sid}_first.txt`);
+    const firstOutput = resolve(TEST_DIR, `${sid}_first.out`);
+    const secondPrompt = resolve(TEST_DIR, `${sid}_second.txt`);
+    const secondOutput = resolve(TEST_DIR, `${sid}_second.out`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(firstPrompt, "Start with maximum reasoning effort.", "utf8");
+    writeFileSync(secondPrompt, "Continue with the same reasoning effort.", "utf8");
+
+    const started = cli([
+      "start", firstPrompt, firstOutput,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+      "--effort", "max",
+    ], { requestLog });
+    assert.equal(started.exit, 0, started.stderr);
+
+    const followedUp = cli([
+      "follow-up", secondPrompt, secondOutput,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--foreground",
+    ], { requestLog });
+    assert.equal(followedUp.exit, 0, followedUp.stderr);
+
+    const turnStarts = readRequests(requestLog)
+      .filter(request => request.method === "turn/start");
+    assert.deepEqual(turnStarts.map(request => request.params.effort), ["max", "max"]);
+  });
+
+  it("preserves an explicit effort through a background worker", async () => {
+    const sid = newSid();
+    const prompt = resolve(TEST_DIR, `${sid}_p.txt`);
+    const output = resolve(TEST_DIR, `${sid}_o.txt`);
+    const requestLog = resolve(TEST_DIR, `${sid}_requests.jsonl`);
+    writeFileSync(prompt, "Use maximum reasoning effort in the worker.", "utf8");
+
+    const started = cli([
+      "start", prompt, output,
+      "--session", sid,
+      "--review-dir", TEST_DIR,
+      "--effort", "max",
+    ], { requestLog });
+    assert.equal(started.exit, 0, started.stderr);
+
+    let completed = false;
+    for (let i = 0; i < 30; i++) {
+      await sleep(100);
+      const status = cli([
+        "status",
+        "--session", sid,
+        "--review-dir", TEST_DIR,
+      ]);
+      if (status.exit === 0) {
+        completed = true;
+        break;
+      }
+      assert.equal(status.exit, 7, status.stderr);
+    }
+    assert.equal(completed, true, "background worker should complete");
+
+    const turnStart = readRequests(requestLog)
+      .find(request => request.method === "turn/start");
+    assert.equal(turnStart?.params?.effort, "max");
+  });
+});
+
 describe("model availability", () => {
   it("fails before thread creation and lists available models", () => {
     const sid = newSid();

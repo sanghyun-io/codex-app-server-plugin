@@ -291,6 +291,7 @@ async function main() {
             }
             request.threadId = previous.threadId;
             if (!request.modelExplicit) request.model = previous.model;
+            if (!request.effortExplicit) request.effort = previous.effort;
           }
           const record = createJob(runtimeDir, request);
           const state = stateFor({ jobId: record.jobId });

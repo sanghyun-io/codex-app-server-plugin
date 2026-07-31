@@ -74,8 +74,8 @@ review-protocol.md의 실행 규칙을 따른다. 세션 이름은 `rr_{SID}`:
 node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/rr_{SID}_r1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/rr_{SID}_r1_output.txt" --session "rr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" --default-model "gpt-5.6-sol"; echo "EXIT_CODE: $?"
 ```
 
-`gpt-5.6-sol`은 red-review의 내부 기본값이다. `$ARGUMENTS`에 `--model <X>`가 있으면 위 명령 끝에 `--model "<X>"`를 추가하며, 사용자 지정 모델이 `--default-model`보다 우선한다. `CODEX_REVIEW_MODEL`도 내부 기본값보다 우선한다.
-모델 오버라이드 처리 규칙은 `codex-code-review.md`의 **모델 오버라이드 처리** 섹션을 동일하게 따른다 (start에서 지정한 모델은 `rr_{SID}_state.json`에 저장되어 follow-up에 자동 재사용됨).
+`gpt-5.6-sol`은 red-review의 내부 기본값이다. `$ARGUMENTS`에 `--model <X>`가 있으면 위 명령 끝에 `--model "<X>"`를 추가하며, 사용자 지정 모델이 `--default-model`보다 우선한다. `CODEX_REVIEW_MODEL`도 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다.
+모델 및 effort 오버라이드 처리 규칙은 `codex-code-review.md`의 **모델 및 effort 오버라이드 처리** 섹션을 동일하게 따른다. `start`에서 지정한 모델과 effort는 `rr_{SID}_state.json`에 저장되어 follow-up에 자동 재사용된다.
 
 폴링 패턴은 code-review와 동일 (30초 간격, 묻지 않고 계속 대기, 2분마다 진행 안내, 30분 하드 타임아웃까지).
 
