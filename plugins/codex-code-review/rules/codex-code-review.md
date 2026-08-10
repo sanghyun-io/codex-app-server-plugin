@@ -45,6 +45,7 @@ triggers:
 | `--base <ref>` | `git diff <ref>...HEAD` |
 | `--model <name>` | Codex 모델 오버라이드 (workflow default: `gpt-5.6-terra`, env: `CODEX_REVIEW_MODEL`) |
 | `--effort <level>` | Codex 추론 강도 오버라이드 (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`; 기본값 `high`) |
+| `--tone <level>` | 리뷰 결과 말투/난이도 (`easy`/`plain`/`normal`/`deep`; 기본값 `plain`) — 위 "말투(Tone) 단계 처리" 참조 |
 | `--with-opus` | Opus 교차검증 활성화 |
 
 ### Base Commit 기록
@@ -70,6 +71,8 @@ CURRENT_COMMIT=$(git rev-parse HEAD)
 | `--model` 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
 | `--effort <level>` 명시 | 모든 `codex-review start` 호출에 `--effort "<level>"` 인자 추가 |
 | `--effort` 미명시 | 인자 생략 (wrapper 기본값 `high`) |
+| `--tone <level>` 명시 | 해당 레벨을 Layer 1(`{TONE_DIRECTIVE}`)·Layer 2(최종 보고)에 적용. codex-review에는 전달하지 않음 |
+| `--tone` 미명시 | 기본값 `plain`(풀어서) 적용 |
 
 ### CLI 명령 형식
 
@@ -98,6 +101,38 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
 
 ---
 
+## 말투(Tone) 단계 처리
+
+리뷰 결과의 난이도를 `--tone <level>`로 조절한다. Codex 프롬프트(Layer 1)와 Claude의 한국어 최종 보고(Layer 2) **양쪽**에 적용된다. `--tone`은 **Claude가 소비**하며 `codex-review.mjs`에는 전달하지 않는다.
+
+| `--tone` | 이름 | 대상 | 규칙 |
+|----------|------|------|------|
+| `easy` | 쉽게 | 비개발자 | 전문 용어 배제, 일상어. 코드/파일 세부 최소화 |
+| `plain` **(기본값)** | 풀어서 | 일반 개발자 | 개발 용어는 쓰되 IDOR/SSRF/TOCTOU 같은 전문 약어가 처음 나올 때마다 괄호로 풀어 설명 |
+| `normal` | 평범하게 | 숙련 개발자 | 전문 용어 그대로, 간결. 풀이 최소 |
+| `deep` | 아주 자세히 | 전문가 | 용어 + CWE/CVE + 공격/재현/완화 전체, 최대 상세 |
+
+> `--effort`(추론 강도)와 혼동 금지 — `--tone`은 **가독성/난이도**, `--effort`는 **추론 깊이**다.
+
+### Layer 1 — Codex 프롬프트의 `{TONE_DIRECTIVE}`
+
+프롬프트 템플릿의 `{TONE_DIRECTIVE}` 플레이스홀더를 아래 레벨별 문장으로 치환한다:
+
+- **easy**: `Write every finding (What/Why/Impact) so a non-expert can follow it. Avoid jargon; if a technical term is unavoidable, define it inline in one short clause. Never use an acronym without expanding it.`
+- **plain** (기본): `Write for a general developer. You may use ordinary development terms, but the FIRST time any specialized or security acronym appears (e.g. IDOR, SSRF, TOCTOU, XXE, CSRF), expand it inline in parentheses. Keep explanations concrete.`
+- **normal**: `Write for an experienced engineer. Use standard technical terminology directly and keep findings concise.`
+- **deep**: `Write for an expert reviewer. Use full technical depth — retain CWE/CVE identifiers, exact mechanisms, and attack/repro detail. Be precise and thorough.`
+
+### Layer 2 — Claude 최종 보고
+
+Claude가 한국어 최종 리포트를 쓸 때 위 레벨 규칙을 따른다 (스킬의 "Reporting to the User" 섹션이 레벨별로 분기).
+
+### 라운드 간 유지
+
+`--tone`은 세션 내내 유지한다 — follow-up 라운드에서도 같은 레벨을 재사용하며, 사용자가 새 `--tone`을 주면 그때부터 바뀐다. (state.json 저장이 아니라 Claude가 세션 컨텍스트에서 기억한다.)
+
+---
+
 ## Round 1: Full Diff 리뷰
 
 ### Step 1: Diff 추출
@@ -118,6 +153,7 @@ review-protocol.md의 **Code Review Prompt Template**를 사용한다.
 - `{REVIEW_HISTORY}`: (Round 1에서는 비어 있음)
 - `{ROUND_NUMBER}`: 1
 - `{ROUND_DIRECTIVE}`: (Round 1에서는 비어 있음)
+- `{TONE_DIRECTIVE}`: `--tone` 레벨에 해당하는 문장 (위 "말투(Tone) 단계 처리" 참조; 미지정 시 `plain`)
 
 ### Step 3: Codex 실행 (비동기)
 
@@ -125,7 +161,7 @@ review-protocol.md의 실행 규칙을 따른다. v2에서는 **비동기 실행
 
 1. `codex-review start` → 워커 spawn, 즉시 반환 (exit 0)
 2. `codex-review status` → 30초 간격 폴링 (exit 7=실행중, 0=완료)
-3. 묻지 않고 계속 대기, 2분마다 진행 안내 1줄 (30분 하드 타임아웃까지)
+3. 묻지 않고 계속 대기, 2분마다 진행 안내 1줄 (turn 지속시간 무제한 — Bash 포그라운드 폴링만, pidAlive/idleMs로 생존 확인)
 
 파일 네이밍: `cr_{SID}_r1_prompt.txt`, `cr_{SID}_r1_output.txt`
 

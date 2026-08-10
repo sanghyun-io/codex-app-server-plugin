@@ -65,6 +65,9 @@ review-protocol.md의 **증분 Diff 추출** 섹션을 따른다 (Round 1 = 전�
 - `{ROUND_NUMBER}`: 1
 - `{ROUND_DIRECTIVE}`: (Round 1에서는 비어 있음)
 - `{TRUST_BOUNDARIES}`: 가능한 경우 "인증 토큰", "외부 API 입력", "DB 경계" 등 프로젝트의 신뢰 경계 힌트
+- `{TONE_DIRECTIVE}`: `--tone` 레벨에 해당하는 문장 (codex-code-review.md의 "말투(Tone) 단계 처리" 참조; 미지정 시 `plain`)
+
+> **말투**: `--tone`(`easy`/`plain`/`normal`/`deep`, 기본 `plain`) 처리는 codex-code-review.md의 "말투(Tone) 단계 처리"를 그대로 따른다. red-review는 특히 `easy`/`plain`에서 보안 약어(IDOR/SSRF/TOCTOU/XXE 등)를 반드시 풀어서 설명한다.
 
 ### Step 3: Codex 실행 (비동기)
 
@@ -77,7 +80,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude
 `gpt-5.6-sol`은 red-review의 내부 기본값이다. `$ARGUMENTS`에 `--model <X>`가 있으면 위 명령 끝에 `--model "<X>"`를 추가하며, 사용자 지정 모델이 `--default-model`보다 우선한다. `CODEX_REVIEW_MODEL`도 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다.
 모델 및 effort 오버라이드 처리 규칙은 `codex-code-review.md`의 **모델 및 effort 오버라이드 처리** 섹션을 동일하게 따른다. `start`에서 지정한 모델과 effort는 `rr_{SID}_state.json`에 저장되어 follow-up에 자동 재사용된다.
 
-폴링 패턴은 code-review와 동일 (30초 간격, 묻지 않고 계속 대기, 2분마다 진행 안내, 30분 하드 타임아웃까지).
+폴링 패턴은 code-review와 동일 (30초 간격, Bash 포그라운드, 묻지 않고 계속 대기, 2분마다 진행 안내, turn 지속시간 무제한).
 
 ### Step 4: 결과 처리
 
@@ -143,6 +146,8 @@ You are a senior offensive security engineer. Review the following code changes 
 - PII/secret handling: at rest, in transit, in backups
 - Side channels (timing, error messages, response size)
 - Overly verbose error responses revealing internals
+
+{TONE_DIRECTIVE}
 
 ## Output Format
 
