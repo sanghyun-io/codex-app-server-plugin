@@ -31,9 +31,9 @@ Wrapper는 thread 라이프사이클을 세 가지 명령으로 관리합니다:
 - `follow-up` — thread resume + 다음 turn (증분 diff만 전송)
 - `close` — 세션 상태 정리
 
-버전 3은 **영속 Supervisor + 격리 Worker** 구조를 사용합니다. Supervisor는 여러 Claude 세션의 작업을 받아 기본 3개까지 병렬 실행하고, 같은 Codex thread의 follow-up은 직렬화합니다. 활성 turn마다 전용 `codex app-server`를 사용하므로 transport나 subprocess 장애는 해당 작업에만 영향을 줍니다. 작업과 부분 출력은 `~/.claude/codex-runtime/v3`에 journal로 남으며, Supervisor가 교체돼도 실행 중 worker는 독립적으로 계속 동작합니다. 복구 가능한 app-server 장애는 현재 turn만 제한적으로 재실행합니다. `SessionEnd`는 v3 작업을 취소하지 않으며 명시적인 `cancel` 또는 `halt`만 작업을 중단합니다.
+버전 3은 **영속 Supervisor + 격리 Worker** 구조를 사용합니다. Supervisor는 여러 Claude 세션의 작업을 받아 기본 3개까지 병렬 실행하고, 같은 Codex thread의 follow-up은 직렬화합니다. 활성 turn마다 전용 `codex app-server`를 사용하므로 transport나 subprocess 장애는 해당 작업에만 영향을 줍니다. 작업과 부분 출력은 `~/.claude/codex-runtime/v3`에 journal로 남으며, Supervisor가 교체돼도 실행 중 worker는 독립적으로 계속 동작합니다. 복구 가능한 app-server 장애는 현재 turn만 제한적으로 재실행합니다. 일시적 thread-resume 오류는 버리지 않고 같은 thread로 재시도하며, follow-up은 직전 turn이 취소(예: `halt`)되거나 실패했어도 세션의 마지막 완료 thread를 재개합니다. `SessionEnd`는 v3 작업을 취소하지 않으며 명시적인 `cancel` 또는 `halt`만 작업을 중단합니다.
 
-각 세션은 canonical Git 프로젝트 루트에 고정되며 동일한 `cwd`가 `thread/start`와 `turn/start`에 전달됩니다. 다른 프로젝트에서 follow-up하면 Codex 호출 전에 실패합니다. progress JSON에는 연결/모델 검증/thread 시작/최초 출력 대기/스트리밍 단계와 프롬프트 크기, 최초 출력 지연, 수신 글자 수, protocol ID, 재접속 횟수가 기록됩니다. 131,072자를 초과하는 프롬프트는 자르지 않고 그대로 전달하며 지연 경고만 남깁니다.
+각 세션은 canonical Git 프로젝트 루트에 고정되며 동일한 `cwd`가 `thread/start`와 `turn/start`에 전달됩니다. 다른 프로젝트에서 follow-up하면 Codex 호출 전에 실패합니다. progress JSON에는 연결/모델 검증/thread 시작/최초 출력 대기/스트리밍 단계와 프롬프트 크기, 최초 출력 지연, 수신 글자 수, protocol ID, turn 생존 신호(`pidAlive`, `idleMs`, `lastActivityAt` — worker가 ~3초마다 checkpoint)가 기록됩니다. 기본적으로 **turn 지속시간 타임아웃이 없습니다**: 출력이 없는 긴 추론(예: ultra effort)은 시계가 아니라 생존 신호로만 판단하며, 상한이 필요하면 `--timeout`/`CODEX_REVIEW_TIMEOUT`로 opt-in합니다. 상태는 포그라운드 `status` 호출로만 폴링합니다 — durable worker가 이미 분리 실행되므로 codex-review 명령을 다른 도구로 백그라운드 처리하지 않습니다(`reconnectCount`는 레거시 broker 경로에서만 나타남). 131,072자를 초과하는 프롬프트는 자르지 않고 그대로 전달하며 지연 경고만 남깁니다.
 
 호출별 모델과 추론 effort를 변경할 수 있습니다. 모델 우선순위는 CLI 플래그 > 환경변수 > 워크플로 기본값 > wrapper 기본값 `gpt-5.6-terra`이며, effort 기본값은 `high`입니다:
 
@@ -164,6 +164,8 @@ Wrapper는 thread를 생성하거나 resume하기 전에 인증 계정의 `model
 
 effort 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`를 인식합니다. 자연어에서는 `gpt-5.6-sol max 로`, `max effort로`, `추론 강도 ultra` 같은 표현을 `--effort`로 변환합니다. 선택된 effort는 후속 turn에서도 자동 재사용되며 새 값을 명시하면 그 turn부터 변경됩니다.
 
+`code-review`와 `red-review`는 추가로 `--tone <level>`을 받습니다 — `easy`(비개발자), `plain`(기본값), `normal`, `deep` — 리뷰 결과의 가독성/난이도를 조절합니다. `--effort`와는 구분됩니다(가독성 vs 추론 깊이): `--tone`은 Codex 리뷰 프롬프트와 Claude의 한국어 최종 보고 양쪽을 조정하며(`easy`/`plain`에서는 IDOR/SSRF 같은 약어를 인라인으로 풀어 설명), CLI로 전달되지 않고 Claude가 처리합니다.
+
 자연어 모델 추출 시 인식되는 prefix: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. 선택된 모델은 thread의 `state.json`에 저장되어 follow-up turn에서 자동 재사용됩니다.
 
 ### A+ 위임 패턴
@@ -241,8 +243,8 @@ Install hook이 `~/.claude/CLAUDE.md`에 별도 마커 블록(`<!-- @codex-code-
 | 1 | codex 미발견 | 자동 스킵 |
 | 2 | 인증 실패 | 자동 스킵 + `codex login` 안내 |
 | 3 | Rate limit | 자동 스킵 |
-| 4 | Thread resume 실패 | 새 thread로 재시도 |
-| 5 | Turn 타임아웃 (30분 safety net) | 부분 출력 저장 |
+| 4 | 재개할 완료 turn 없음 (롤아웃 미저장) | status 재폴링(일시 오류는 같은 thread로 자동 재시도); 완료 이력이 전혀 없을 때만 새 thread 시작 |
+| 5 | Turn 타임아웃 (`--timeout`/`CODEX_REVIEW_TIMEOUT` 지정 시에만) | 부분 출력 저장 |
 | 6 | 프로세스 에러 | 1회 재시도 후 스킵 |
 | 7 | Turn 진행 중 | (status 명령 한정) |
 | 8 | Turn 취소됨 | 부분 출력 저장 |

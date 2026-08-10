@@ -31,9 +31,9 @@ The wrapper manages thread lifecycle via three commands:
 - `follow-up` — resume thread + next turn (incremental diff only)
 - `close` — clean up session state
 
-Version 3 uses a persistent **supervisor with isolated workers**. The supervisor accepts work from multiple Claude sessions, runs three unrelated turns concurrently by default, and serializes follow-ups that share a Codex thread. Each active turn owns a dedicated `codex app-server`, so a transport or subprocess failure affects only that job. Jobs and partial output are journaled under `~/.claude/codex-runtime/v3`; a replacement supervisor recovers the queue while already-running workers continue independently. Recoverable app-server failures replay only the current turn with bounded backoff. `SessionEnd` does not cancel v3 jobs; use `cancel` or `halt` explicitly.
+Version 3 uses a persistent **supervisor with isolated workers**. The supervisor accepts work from multiple Claude sessions, runs three unrelated turns concurrently by default, and serializes follow-ups that share a Codex thread. Each active turn owns a dedicated `codex app-server`, so a transport or subprocess failure affects only that job. Jobs and partial output are journaled under `~/.claude/codex-runtime/v3`; a replacement supervisor recovers the queue while already-running workers continue independently. Recoverable app-server failures replay only the current turn with bounded backoff. A transient thread-resume error is retried on the same thread rather than discarded, and a follow-up resumes the session's last completed thread even when the previous turn was cancelled (e.g. via `halt`) or failed. `SessionEnd` does not cancel v3 jobs; use `cancel` or `halt` explicitly.
 
-Each session is bound to the canonical Git project root and sends that same `cwd` to both `thread/start` and `turn/start`. Follow-ups from another project fail before reaching Codex. Progress JSON exposes connection/validation/thread/first-output/streaming phases plus prompt size, first-output latency, received characters, protocol IDs, and reconnect count. Prompts over 131,072 characters are preserved intact and receive a latency warning only.
+Each session is bound to the canonical Git project root and sends that same `cwd` to both `thread/start` and `turn/start`. Follow-ups from another project fail before reaching Codex. Progress JSON exposes connection/validation/thread/first-output/streaming phases plus prompt size, first-output latency, received characters, protocol IDs, and per-turn liveness (`pidAlive`, `idleMs`, `lastActivityAt` — the worker checkpoints every ~3s). By default there is **no turn-duration timeout**: a long, output-less reasoning phase (e.g. ultra effort) is bounded only by liveness, not a wall clock — opt into a cap with `--timeout`/`CODEX_REVIEW_TIMEOUT`. Poll status only with a foreground `status` call; the durable worker already runs detached, so codex-review commands are never backgrounded via other tooling (`reconnectCount` appears only on the legacy broker path). Prompts over 131,072 characters are preserved intact and receive a latency warning only.
 
 The model and reasoning effort used for each call are configurable. Model priority is CLI flag > env var > workflow default > wrapper default `gpt-5.6-terra`; effort defaults to `high`:
 
@@ -164,6 +164,8 @@ Before creating or resuming a thread, the wrapper checks `model/list` for the au
 
 Recognized effort values are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Natural-language forms such as `gpt-5.6-sol max 로`, `at max effort`, and `reasoning effort ultra` become `--effort` arguments. The selected effort is reused on follow-up turns until explicitly changed.
 
+`code-review` and `red-review` additionally accept `--tone <level>` — `easy` (non-developer), `plain` (default), `normal`, `deep` — to set how readable the reported findings are. This is distinct from `--effort` (readability vs reasoning depth): `--tone` shapes both the Codex review prompt and Claude's final Korean report (expanding acronyms like IDOR/SSRF inline at `easy`/`plain`), and is handled by Claude rather than passed to the CLI.
+
 Recognized model prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 
 ### A+ Delegation Pattern
@@ -241,8 +243,8 @@ The install hook adds a separate marker block (`<!-- @codex-code-review:begin --
 | 1 | codex not found | Auto-skip |
 | 2 | Auth failure | Auto-skip + `codex login` guide |
 | 3 | Rate limit | Auto-skip |
-| 4 | Thread resume fail | Retry with new thread |
-| 5 | Turn timeout (30 min safety net) | Save partial output |
+| 4 | No resumable completed turn (rollout not persisted) | Re-poll status (transient errors auto-retry the same thread); start a new thread only if no turn ever completed |
+| 5 | Turn timeout (only when `--timeout` / `CODEX_REVIEW_TIMEOUT` is set) | Save partial output |
 | 6 | Process error | 1 retry, then skip |
 | 7 | Turn still running | (status command only) |
 | 8 | Turn cancelled | Save partial output |
