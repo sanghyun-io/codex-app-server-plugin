@@ -67,7 +67,7 @@ review-protocol.md의 **증분 Diff 추출** 섹션을 따른다 (Round 1 = 전�
 - `{TRUST_BOUNDARIES}`: 가능한 경우 "인증 토큰", "외부 API 입력", "DB 경계" 등 프로젝트의 신뢰 경계 힌트
 - `{TONE_DIRECTIVE}`: `--tone` 레벨에 해당하는 문장 (codex-code-review.md의 "말투(Tone) 단계 처리" 참조; 미지정 시 `plain`)
 
-> **말투**: `--tone`(`easy`/`plain`/`normal`/`deep`, 기본 `plain`) 처리는 codex-code-review.md의 "말투(Tone) 단계 처리"를 그대로 따른다. red-review는 특히 `easy`/`plain`에서 보안 약어(IDOR/SSRF/TOCTOU/XXE 등)를 반드시 풀어서 설명한다.
+> **말투**: `--tone`(`easy`/`plain`/`normal`/`deep`; 영속 기본값은 설정 파일 `~/.claude/codex-review.config.json`의 `defaultTone`, 없으면 `plain`) 처리는 codex-code-review.md의 "말투(Tone) 단계 처리"(레벨 결정 순서·설정 파일·세션 override)를 그대로 따른다. red-review는 특히 `easy`/`plain`에서 보안 약어(IDOR/SSRF/TOCTOU/XXE 등)를 반드시 풀어서 설명한다.
 
 ### Step 3: Codex 실행 (비동기)
 

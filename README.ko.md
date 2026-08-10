@@ -164,7 +164,7 @@ Wrapper는 thread를 생성하거나 resume하기 전에 인증 계정의 `model
 
 effort 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`를 인식합니다. 자연어에서는 `gpt-5.6-sol max 로`, `max effort로`, `추론 강도 ultra` 같은 표현을 `--effort`로 변환합니다. 선택된 effort는 후속 turn에서도 자동 재사용되며 새 값을 명시하면 그 turn부터 변경됩니다.
 
-`code-review`와 `red-review`는 추가로 `--tone <level>`을 받습니다 — `easy`(비개발자), `plain`(기본값), `normal`, `deep` — 리뷰 결과의 가독성/난이도를 조절합니다. `--effort`와는 구분됩니다(가독성 vs 추론 깊이): `--tone`은 Codex 리뷰 프롬프트와 Claude의 한국어 최종 보고 양쪽을 조정하며(`easy`/`plain`에서는 IDOR/SSRF 같은 약어를 인라인으로 풀어 설명), CLI로 전달되지 않고 Claude가 처리합니다.
+`code-review`와 `red-review`는 추가로 `--tone <level>`을 받습니다 — `easy`(비개발자), `plain`(기본값), `normal`, `deep` — 리뷰 결과의 가독성/난이도를 조절합니다. `--effort`와는 구분됩니다(가독성 vs 추론 깊이): `--tone`은 Codex 리뷰 프롬프트와 Claude의 한국어 최종 보고 양쪽을 조정하며(`easy`/`plain`에서는 IDOR/SSRF 같은 약어를 인라인으로 풀어 설명), CLI로 전달되지 않고 Claude가 처리합니다. 영속 기본값은 `~/.claude/codex-review.config.json`의 `defaultTone`에 저장됩니다(없으면 `plain`). `--tone`과 세션 내 발화는 그 세션에만 적용되는 override이며 이 파일을 바꾸지 않습니다.
 
 자연어 모델 추출 시 인식되는 prefix: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. 선택된 모델은 thread의 `state.json`에 저장되어 follow-up turn에서 자동 재사용됩니다.
 

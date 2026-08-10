@@ -71,8 +71,8 @@ CURRENT_COMMIT=$(git rev-parse HEAD)
 | `--model` 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
 | `--effort <level>` 명시 | 모든 `codex-review start` 호출에 `--effort "<level>"` 인자 추가 |
 | `--effort` 미명시 | 인자 생략 (wrapper 기본값 `high`) |
-| `--tone <level>` 명시 | 해당 레벨을 Layer 1(`{TONE_DIRECTIVE}`)·Layer 2(최종 보고)에 적용. codex-review에는 전달하지 않음 |
-| `--tone` 미명시 | 기본값 `plain`(풀어서) 적용 |
+| `--tone <level>` 명시 | 해당 레벨을 Layer 1(`{TONE_DIRECTIVE}`)·Layer 2(최종 보고)에 적용(세션 override). codex-review에는 전달하지 않음 |
+| `--tone` 미명시 | 설정 파일 `defaultTone`(영속 기본값) 적용, 없으면 `plain` — 아래 "말투(Tone) 단계 처리" 참조 |
 
 ### CLI 명령 형식
 
@@ -105,10 +105,12 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
 
 리뷰 결과의 난이도를 `--tone <level>`로 조절한다. Codex 프롬프트(Layer 1)와 Claude의 한국어 최종 보고(Layer 2) **양쪽**에 적용된다. `--tone`은 **Claude가 소비**하며 `codex-review.mjs`에는 전달하지 않는다.
 
+**적용 레벨 결정 순서**: `--tone` 플래그(세션 override) > 세션 내 발화("쉽게 설명해줘" 등, 세션 override) > 설정 파일 `defaultTone`(영속 기본값) > 내장 기본값 `plain`.
+
 | `--tone` | 이름 | 대상 | 규칙 |
 |----------|------|------|------|
 | `easy` | 쉽게 | 비개발자 | 전문 용어 배제, 일상어. 코드/파일 세부 최소화 |
-| `plain` **(기본값)** | 풀어서 | 일반 개발자 | 개발 용어는 쓰되 IDOR/SSRF/TOCTOU 같은 전문 약어가 처음 나올 때마다 괄호로 풀어 설명 |
+| `plain` **(기본 fallback)** | 풀어서 | 일반 개발자 | 개발 용어는 쓰되 IDOR/SSRF/TOCTOU 같은 전문 약어가 처음 나올 때마다 괄호로 풀어 설명 |
 | `normal` | 평범하게 | 숙련 개발자 | 전문 용어 그대로, 간결. 풀이 최소 |
 | `deep` | 아주 자세히 | 전문가 | 용어 + CWE/CVE + 공격/재현/완화 전체, 최대 상세 |
 
@@ -127,9 +129,21 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
 
 Claude가 한국어 최종 리포트를 쓸 때 위 레벨 규칙을 따른다 (스킬의 "Reporting to the User" 섹션이 레벨별로 분기).
 
-### 라운드 간 유지
+### 기본값 설정 (영속)
 
-`--tone`은 세션 내내 유지한다 — follow-up 라운드에서도 같은 레벨을 재사용하며, 사용자가 새 `--tone`을 주면 그때부터 바뀐다. (state.json 저장이 아니라 Claude가 세션 컨텍스트에서 기억한다.)
+`--tone`이 없을 때 쓰는 **영속 기본값**은 설정 파일에 저장한다:
+
+- **파일**: `{HOME_LITERAL}/.claude/codex-review.config.json` (`~/.claude/codex-review.config.json`)
+- **형식**: `{ "defaultTone": "easy" | "plain" | "normal" | "deep" }` — 파일이 없거나 값이 유효하지 않으면 `plain`
+- **읽기**: 리뷰 시작 시 Claude가 이 파일을 1회 읽어 기본값을 확정한다. 세션 초기화의 HOME 확인 Bash 단계에서 함께 확인한다:
+  ```bash
+  cat "{HOME_LITERAL}/.claude/codex-review.config.json" 2>/dev/null || echo '{}'
+  ```
+- **기본값 변경**: 사용자가 파일을 직접 편집하거나, "기본 말투 easy로 바꿔줘" 같이 요청하면 Claude가 이 파일의 `defaultTone`을 생성/수정한다(다른 키는 보존). **이 파일은 유저 데이터라 플러그인 재설치/업데이트로 덮이지 않는다.**
+
+### 세션 override / 라운드 간 유지
+
+`--tone` 플래그와 세션 내 발화는 **그 세션에만** 적용되는 override다 — follow-up 라운드에서 유지되지만 **설정 파일(영속 기본값)은 절대 바꾸지 않는다**(Claude가 세션 컨텍스트에서만 기억). 사용자가 세션 중 새 `--tone`/발화를 주면 그 시점부터 세션 값이 바뀐다.
 
 ---
 
@@ -153,7 +167,7 @@ review-protocol.md의 **Code Review Prompt Template**를 사용한다.
 - `{REVIEW_HISTORY}`: (Round 1에서는 비어 있음)
 - `{ROUND_NUMBER}`: 1
 - `{ROUND_DIRECTIVE}`: (Round 1에서는 비어 있음)
-- `{TONE_DIRECTIVE}`: `--tone` 레벨에 해당하는 문장 (위 "말투(Tone) 단계 처리" 참조; 미지정 시 `plain`)
+- `{TONE_DIRECTIVE}`: 결정된 말투 레벨(결정 순서: `--tone` > 발화 > 설정 파일 `defaultTone` > `plain`)에 해당하는 문장 (위 "말투(Tone) 단계 처리" 참조)
 
 ### Step 3: Codex 실행 (비동기)
 

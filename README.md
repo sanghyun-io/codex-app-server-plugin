@@ -164,7 +164,7 @@ Before creating or resuming a thread, the wrapper checks `model/list` for the au
 
 Recognized effort values are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Natural-language forms such as `gpt-5.6-sol max 로`, `at max effort`, and `reasoning effort ultra` become `--effort` arguments. The selected effort is reused on follow-up turns until explicitly changed.
 
-`code-review` and `red-review` additionally accept `--tone <level>` — `easy` (non-developer), `plain` (default), `normal`, `deep` — to set how readable the reported findings are. This is distinct from `--effort` (readability vs reasoning depth): `--tone` shapes both the Codex review prompt and Claude's final Korean report (expanding acronyms like IDOR/SSRF inline at `easy`/`plain`), and is handled by Claude rather than passed to the CLI.
+`code-review` and `red-review` additionally accept `--tone <level>` — `easy` (non-developer), `plain` (default), `normal`, `deep` — to set how readable the reported findings are. This is distinct from `--effort` (readability vs reasoning depth): `--tone` shapes both the Codex review prompt and Claude's final Korean report (expanding acronyms like IDOR/SSRF inline at `easy`/`plain`), and is handled by Claude rather than passed to the CLI. The persistent default lives in `~/.claude/codex-review.config.json` (`defaultTone`, else `plain`); `--tone` and in-session requests override it for the current session only and never rewrite that file.
 
 Recognized model prefixes for natural language extraction: `gpt-*`, `o1*`, `o3*`, `o4*`, `claude-*`, `gemini-*`. Selected model is stored in the thread's `state.json` and reused automatically across follow-up turns.
 
