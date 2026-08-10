@@ -135,6 +135,7 @@ Claude가 한국어 최종 리포트를 쓸 때 위 레벨 규칙을 따른다 (
 
 - **파일**: `{HOME_LITERAL}/.claude/codex-review.config.json` (`~/.claude/codex-review.config.json`)
 - **형식**: `{ "defaultTone": "easy" | "plain" | "normal" | "deep" }` — 파일이 없거나 값이 유효하지 않으면 `plain`
+- **생성**: 플러그인 설치/업데이트 시 codex-code-review `install.sh`가 파일이 없으면 `{"defaultTone": "plain"}`으로 생성하고, **있으면 건드리지 않는다**(유저 설정 보존).
 - **읽기**: 리뷰 시작 시 Claude가 이 파일을 1회 읽어 기본값을 확정한다. 세션 초기화의 HOME 확인 Bash 단계에서 함께 확인한다:
   ```bash
   cat "{HOME_LITERAL}/.claude/codex-review.config.json" 2>/dev/null || echo '{}'

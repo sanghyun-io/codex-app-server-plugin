@@ -32,6 +32,17 @@ done
 
 echo ""
 
+# Seed the persistent tone config if absent (preserve an existing user setting)
+TONE_CONFIG="$HOME/.claude/codex-review.config.json"
+if [ -f "$TONE_CONFIG" ]; then
+  echo -e "${YELLOW}⚠️  codex-review.config.json exists — preserving your defaultTone${NC}"
+else
+  printf '{\n  "defaultTone": "plain"\n}\n' > "$TONE_CONFIG"
+  echo -e "✓ Seeded ${GREEN}~/.claude/codex-review.config.json${NC} (defaultTone: plain)"
+fi
+
+echo ""
+
 # Auto-activate: append @imports to ~/.claude/CLAUDE.md
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 MARKER_BEGIN="<!-- @codex-code-review:begin -->"
