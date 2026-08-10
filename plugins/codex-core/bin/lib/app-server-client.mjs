@@ -228,7 +228,14 @@ export class AppServerClient {
 
   resumeThread(threadId) {
     return this.request("thread/resume", { threadId }).catch(error => {
-      throw new AppServerError(4, `Thread resume failed: ${messageFrom(error)}`, error);
+      const message = messageFrom(error);
+      // A thread's rollout persists on disk after its first completed turn, so a
+      // failed resume is almost always a transient transport/app-server hiccup.
+      // Classify it retryable so the supervisor's backoff recovery re-resumes the
+      // SAME thread instead of discarding a recoverable session. Only "the thread
+      // was never persisted" is a permanent (non-retryable) exit-4 failure.
+      const permanent = /no rollout|not found|no such thread|unknown thread|does not exist/i.test(message);
+      throw new AppServerError(4, `Thread resume failed: ${message}`, error, !permanent);
     });
   }
 
@@ -237,7 +244,11 @@ export class AppServerClient {
   }
 
   startTurn(threadId, prompt, options = {}) {
-    const timeoutMs = options.timeoutMs || 1_800_000;
+    // 0 (or unset) = no turn-duration cap. Long reasoning (e.g. ultra effort) can
+    // legitimately run far beyond any fixed clock, and liveness is tracked out of
+    // band (worker heartbeat + terminal turn/completed / error / disconnect events),
+    // so an artificial hard timeout is opt-in only via options.timeoutMs.
+    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 0;
     return new Promise((resolvePromise, rejectPromise) => {
       let settled = false;
       let turnId = null;
@@ -277,7 +288,9 @@ export class AppServerClient {
         }
       });
       const removeDisconnect = this.onDisconnect(error => finish(error));
-      const timer = setTimeout(() => finish(new AppServerError(5, `Turn timed out after ${timeoutMs}ms`)), timeoutMs);
+      const timer = timeoutMs > 0
+        ? setTimeout(() => finish(new AppServerError(5, `Turn timed out after ${timeoutMs}ms`)), timeoutMs)
+        : null;
       const cancelTimer = setInterval(() => {
         if (!options.cancelSignal?.() || !turnId || interruptSent || settled) return;
         interruptSent = true;

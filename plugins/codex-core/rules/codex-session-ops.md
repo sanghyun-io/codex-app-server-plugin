@@ -44,7 +44,7 @@ code-review, delegate, red-review 등 모든 스킬이 제출한 v3 durable job�
 | 1 | sessions 절차로 완료된(`completed` / `cancelled` / `timeout_partial`) 세션 수집 |
 | 2 | 복수 세션이면 **AskUserQuestion**으로 대상 선택 |
 | 3 | 해당 세션의 최신 `_output.txt`를 Read로 읽고 표시 |
-| 4 | `_state.json`에서 `threadId` + 턴 수 + 모델을 추출해 메타데이터로 함께 표시 |
+| 4 | v3 세션은 `codex-review status`/`list`(런타임 저널)에서 `threadId`·턴 수·모델을 추출해 표시한다. (`_state.json`은 레거시 foreground 경로에서만 생성되어 v3 기본 경로엔 없다) |
 
 > **참고**: 여기서 말하는 `threadId`는 Codex App Server가 관리하는 내부 thread ID이며,
 > 사용자가 직접 interactive `codex` CLI로 이어 쓸 수 있는 session UUID와는 다르다.
@@ -59,24 +59,25 @@ code-review, delegate, red-review 등 모든 스킬이 제출한 v3 durable job�
 
 ```json
 {
-  "status": "streaming",
-  "startedAt": "2026-04-10T10:23:45.123Z",
+  "schemaVersion": 3,
+  "status": "running",
+  "createdAt": "2026-04-10T10:23:45.123Z",
+  "updatedAt": "2026-04-10T10:24:30.123Z",
+  "lastActivityAt": "2026-04-10T10:24:30.123Z",
+  "idleMs": 2100,
   "elapsedMs": 45000,
   "projectRoot": "/repo",
-  "promptChars": 42000,
   "threadId": "thr_abc123",
   "turnId": "turn_abc123",
   "charsReceived": 3200,
-  "firstOutputMs": 9700,
-  "lastEventAt": "2026-04-10T10:24:30.123Z",
-  "reconnectCount": 0,
-  "reconnectAttemptCount": 0,
   "pid": 12345,
   "pidAlive": true
 }
 ```
 
 **status 값**: `queued` / `starting` / `running` / `recovering` / `completed` / `cancelled` / `failed`
+
+> `status`/`list`는 **Bash 포그라운드로만 조회**한다 (Monitor·`run_in_background` 금지 — review-protocol.md의 "상태 조회 메커니즘" 참조). 실행 중 세션의 생존은 `pidAlive`와 `idleMs`(워커가 ~3초마다 checkpoint)로 판단하며, turn 지속시간 제한은 없다. `status: "streaming"`, `startedAt`, `promptChars`, `firstOutputAt`/`firstOutputMs`, `lastEventAt`, `warnings`, `reconnectCount`/`reconnectAttemptCount`는 레거시 foreground/broker 경로에서만 나오며 v3 기본 경로에는 없다.
 
 ### Thread 메타데이터
 
@@ -133,8 +134,9 @@ code-review, delegate, red-review 등 모든 스킬이 제출한 v3 durable job�
 
 Partial output (if any): {HOME}/.claude/tmp/{prefix}_{SID}_{last}_output.txt
 
-The thread state ({prefix}_{SID}_state.json) is preserved — you can invoke the same
-skill again and it will follow up on the existing thread instead of starting fresh.
+The thread stays resumable — invoke the same skill again and it will follow up on the
+existing thread instead of starting fresh. The runtime resumes the last completed
+turn's thread even though this turn was cancelled (no context is lost).
 ```
 
 ---

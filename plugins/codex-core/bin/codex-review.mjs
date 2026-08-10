@@ -13,7 +13,7 @@
  * Options:
  *   --model <MODEL>       Model override (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
  *   --effort <LEVEL>      Reasoning effort override (default: high)
- *   --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
+ *   --timeout <MS>        Optional turn-duration cap in ms (default: none/unlimited, env: CODEX_REVIEW_TIMEOUT)
  *   --foreground          Run synchronously (v1 compat, no background worker)
  *   --stdin               Read prompt from stdin and write to <prompt-file> (avoids Write tool permission)
  *
@@ -23,7 +23,7 @@
  *   2 = auth failure
  *   3 = rate limit exceeded
  *   4 = thread resume failure
- *   5 = turn timeout (hard safety net)
+ *   5 = turn timeout (only when --timeout / CODEX_REVIEW_TIMEOUT is set)
  *   6 = process error
  *   7 = turn still running (status command only)
  *   8 = turn cancelled
@@ -48,7 +48,7 @@ import { ensureSupervisor, requestRuntime } from "./lib/runtime-ipc.mjs";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const DEFAULT_EFFORT = "high";
-const DEFAULT_HARD_TIMEOUT_MS = 1_800_000; // 30 min safety net
+const DEFAULT_HARD_TIMEOUT_MS = 0; // 0 = no turn-duration cap; opt-in via --timeout / CODEX_REVIEW_TIMEOUT
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
 const PROGRESS_RENAME_RETRY_DELAYS_MS = [10, 25, 50];
@@ -1972,10 +1972,18 @@ function exitForV3Status(state) {
 async function v3Status(parsed) {
   await ensureSupervisor({ runtimeDir: V3_RUNTIME_DIR });
   const state = await requestRuntime("status", { sessionId: parsed.sessionId }, { runtimeDir: V3_RUNTIME_DIR });
+  const lastActivityAt = state.at || state.completedAt || state.createdAt;
+  const idleMs = lastActivityAt ? Date.now() - new Date(lastActivityAt).getTime() : null;
   const publicState = {
     ...state,
     schemaVersion: 3,
-    updatedAt: state.at || state.completedAt || state.createdAt,
+    updatedAt: lastActivityAt,
+    // lastActivityAt/idleMs expose worker liveness: the worker writes a checkpoint
+    // every ~3s while a turn runs, so a small idleMs with pidAlive=true means the
+    // model is still working (even during long, output-less reasoning). There is no
+    // turn-duration timeout — decide "stuck" from pidAlive/idleMs, not elapsed time.
+    lastActivityAt,
+    idleMs,
     elapsedMs: Date.now() - new Date(state.createdAt).getTime(),
     outputFile: state.outputPath,
     pidAlive: ACTIVE_PROGRESS_STATUSES.has(state.status) ? isAlive(Number(state.pid)) : false,
@@ -2049,7 +2057,7 @@ Usage:
 Options:
   --model <MODEL>       Model to use (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
   --effort <LEVEL>      Reasoning effort to use (default: high)
-  --timeout <MS>        Hard timeout in ms (default: 1800000, env: CODEX_REVIEW_TIMEOUT)
+  --timeout <MS>        Optional turn-duration cap in ms (default: none/unlimited, env: CODEX_REVIEW_TIMEOUT)
   --foreground          Run synchronously (v1 compat)
   --stdin               Read prompt from stdin, write to <prompt-file>
 
@@ -2059,7 +2067,7 @@ Exit codes:
   2 = auth failure
   3 = rate limit exceeded
   4 = thread resume failure
-  5 = turn timeout (hard safety net)
+  5 = turn timeout (only when --timeout / CODEX_REVIEW_TIMEOUT is set)
   6 = process error
   7 = turn still running (status only)
   8 = turn cancelled`);

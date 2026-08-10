@@ -20,7 +20,7 @@ Codex를 이용한 리뷰 실행 시 아래 프로토콜을 반드시 따를 것
 | Fallback | 없음 — 실패 시 즉시 PASS |
 | 모델 오버라이드 | `--model <MODEL>` CLI 플래그 또는 `CODEX_REVIEW_MODEL` 환경변수 (wrapper 기본값: `gpt-5.6-terra`, red-review: `gpt-5.6-sol`, read-only delegate: `gpt-5.6-luna`) |
 | 추론 effort 오버라이드 | `--effort <LEVEL>` CLI 플래그 (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`; wrapper 기본값: `high`) |
-| 타임아웃 오버라이드 | `--timeout <MS>` CLI 플래그 또는 `CODEX_REVIEW_TIMEOUT` 환경변수 (기본값: `1800000` / 30분) |
+| 타임아웃 오버라이드 | `--timeout <MS>` CLI 플래그 또는 `CODEX_REVIEW_TIMEOUT` 환경변수 (기본값: **없음 — turn 지속시간 무제한**. 상한이 필요할 때만 opt-in) |
 | 실행 모드 | **비동기** (백그라운드 워커) — `start`/`follow-up`은 즉시 반환, `status`로 폴링 |
 
 > **App Server 사용 이유**:
@@ -141,6 +141,12 @@ echo "EXIT_CODE: $?"
 
 #### Step 2: 진행 상황 폴링 (status)
 
+> **⛔ 상태 조회 메커니즘 (유일한 방법)**: 실행 중인 Codex job의 상태 확인은 **오직** 아래 방법 하나뿐이다.
+> - **Bash 도구로 `codex-review.mjs status`를 포그라운드에서 1회 호출** → 30초 간격으로 반복 (아래 절차).
+> - ❌ **Monitor 도구 금지**, ❌ `run_in_background: true` 금지, ❌ `codex-review`의 start/follow-up/status/list/cancel에 TaskOutput/BashOutput 사용 금지.
+> - **왜**: `start`/`follow-up`은 즉시 반환(exit 0)하고, 장기 turn은 CLI 내부의 durable supervisor가 이미 백그라운드 워커로 처리한다. 따라서 Claude가 추가로 백그라운드에 돌릴 대상이 없다. `status`/`list`는 즉시 끝나는 동기 조회다. 전역 CLAUDE.md의 "장기 명령은 `run_in_background`로" 지침은 **codex-review 명령에는 적용되지 않는다**.
+> - status가 내보내는 JSON(`pidAlive`, `idleMs`, `lastActivityAt`, `charsReceived`)은 포그라운드 호출로만 확보된다 — 이 값들로 생존/진행을 판단한다.
+
 `start`가 exit 0을 반환하면, **30초 간격**으로 `status` 명령을 호출하여 진행 상황을 확인한다:
 
 ```bash
@@ -153,7 +159,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 |:---------:|------|------|
 | 0 | `completed` | **Step 3으로 진행** — 출력 파일 읽기 |
 | 7 | `queued` / `connecting` / `validating_model` / `starting_thread` / `waiting_first_output` / `streaming` / `reconnecting` | **30초 후 재폴링** (아래 진행 안내 규칙 참조) |
-| 5 | `timeout_partial` | 부분 출력 저장됨 — Step 3으로 진행 (출력 파일 읽기) |
+| 5 | `timeout_partial` (`--timeout` 지정 시에만 발생) | 부분 출력 저장됨 — Step 3으로 진행 (출력 파일 읽기) |
 | 8 | `cancelled` | 취소됨 — 부분 출력이 있으면 읽기 |
 | 6 | `crashed` / `failed` | 에러 처리 섹션 참조 |
 | 1-4 | 기타 에러 | 에러 처리 섹션 참조 |
@@ -161,25 +167,26 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 **status JSON 형식**:
 ```json
 {
-  "status": "streaming",
-  "startedAt": "2026-03-23T...",
+  "schemaVersion": 3,
+  "status": "running",
+  "createdAt": "2026-03-23T...",
+  "updatedAt": "2026-03-23T...",
+  "lastActivityAt": "2026-03-23T...",
+  "idleMs": 2100,
   "elapsedMs": 45000,
   "projectRoot": "/repo",
-  "promptChars": 182400,
   "threadId": "thr_...",
   "turnId": "turn_...",
   "charsReceived": 3200,
-  "firstOutputAt": "2026-03-23T...",
-  "firstOutputMs": 12800,
-  "lastEventAt": "2026-03-23T...",
-  "reconnectCount": 0,
-  "reconnectAttemptCount": 0,
+  "outputFile": ".../cr_{SID}_r1_output.txt",
   "pid": 12345,
   "pidAlive": true
 }
 ```
 
-`promptChars > 131072`이면 `warnings`에 최초 출력 지연 가능성이 기록되지만 프롬프트는 축약·분할·재전송하지 않는다.
+> **`lastActivityAt`/`idleMs`로 생존 판단**: 워커는 turn 동안 ~3초마다 checkpoint를 기록하므로, `idleMs`가 작고 `pidAlive: true`면 (출력이 없어도) 모델이 살아 추론 중이다. v3 상태값은 `queued`/`starting`/`running`/`recovering`/`completed`/`cancelled`/`failed`뿐이다. `status: "streaming"`, `startedAt`, `promptChars`, `firstOutputAt`/`firstOutputMs`, `lastEventAt`, `warnings`, `reconnectCount`/`reconnectAttemptCount`는 **레거시 foreground/broker 경로에서만** 나오며 v3 기본 경로에는 없다.
+
+대용량 프롬프트도 축약·분할·재전송 없이 그대로 전달된다.
 
 **진행 안내 규칙**: Codex 요청은 수 분이 걸릴 수 있으므로, **중간에 사용자에게 계속할지 묻지 않고 계속 대기**한다.
 대신 진행 상황만 주기적으로 텍스트로 안내한다.
@@ -189,8 +196,8 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" status --session "cr_{SID}" -
 | 폴링 간격 | **30초** (변함없음 — exit 7이면 계속 재폴링) |
 | 진행 안내 주기 | **2분(120초)마다 1회**, 한 줄로 경과 시간과 수신량을 안내 |
 | 안내 형식 | `Codex 진행 중 — {elapsed}초 경과, {charsReceived}자 수신` (예: `Codex 진행 중 — 240초 경과, 5,120자 수신`) |
-| 종료 조건 | `status`가 exit 0(completed) 또는 exit 5(timeout_partial)를 반환할 때까지 폴링 지속 |
-| 하드 타임아웃 | **30분 safety net 유지** — `status`가 exit 5(`timeout_partial`)를 반환하면 부분 출력으로 Step 3 진행 |
+| 종료 조건 | `status`가 exit 0(completed)을 반환할 때까지 폴링 지속. (`--timeout`을 지정한 경우에만 exit 5(`timeout_partial`)도 종료 조건) |
+| 무제한 대기 | **turn 지속시간 상한 없음**(기본값). `pidAlive: true`이고 `idleMs`가 작으면(워커가 ~3초마다 checkpoint 기록) 출력이 없어도 정상 추론 중이므로 계속 대기 — Ultra effort가 수십 분 걸려도 정상이다. 진짜 멈춤은 `pidAlive: false`이거나 `idleMs`가 무한정 커질 때뿐. 상한이 꼭 필요하면 `--timeout <MS>`로 opt-in |
 
 > **⛔ AskUserQuestion 금지**: 대기 시간이 길다는 이유만으로 사용자에게 계속/취소/PASS를 묻지 않는다.
 > 사용자가 멈추고 싶으면 직접 `/codex-core:halt`(또는 `/codex-core:sessions`로 확인 후 halt)를 호출하거나 세션에 개입한다.
@@ -254,17 +261,18 @@ echo "EXIT_CODE: $?"
 #### Step 2: 진행 상황 폴링 (status)
 
 PHASE 1 Step 2와 **동일한 폴링 패턴**을 사용한다:
-- 30초 간격으로 `status` 명령 호출
+- 30초 간격으로 `status` 명령 호출 (Bash 포그라운드 — Monitor/백그라운드 금지)
 - 묻지 않고 계속 대기, 2분(120초)마다 진행 상황만 1줄 안내
-- 완료(exit 0) 또는 30분 하드 타임아웃(exit 5)까지 폴링 지속 → 출력 파일 읽기
+- 완료(exit 0)까지 폴링 지속(turn 지속시간 무제한; `--timeout` 지정 시에만 exit 5도 종료) → 출력 파일 읽기
 
 #### Step 3: 결과 수집
 
 Read 도구로 `{HOME}/.claude/tmp/cr_{SID}_r{N}_output.txt` 읽기.
 
-exit code 4 (resume fail) 발생 시:
-- Thread가 손상되었을 수 있음
-- `codex-review start`로 새 Thread 생성 후 전체 diff로 재시작
+exit code 4 (resume 불가) 발생 시:
+- **스레드 "손상"이 아니다.** exit 4는 "아직 재개할 완료된 turn이 없음"(세션에 completed 이력 없음) 또는 스레드 롤아웃이 저장된 적 없음을 뜻한다.
+- 일시적 전송 오류라면 supervisor가 **같은 스레드로 자동 재시도**(1/3/10초 backoff)하므로, 먼저 `status`를 다시 폴링한다.
+- 완료된 turn이 하나라도 있었던 세션은 계속 재개 가능하다. `status`가 최종 `failed`이고 완료 이력이 전혀 없을 때에만 `codex-review start`로 새 Thread를 시작한다(이때만 전체 diff 재전송).
 
 ---
 
@@ -495,6 +503,8 @@ Review the following code changes critically as a senior engineer.
 - Memory-usage concerns
 - Slow or high-complexity code paths
 
+{TONE_DIRECTIVE}
+
 ## Output Format
 
 For EACH issue found, use this exact format:
@@ -541,7 +551,7 @@ After all issues, provide:
 | Exit Code | 의미 | 처리 |
 |:---------:|------|------|
 | 0 | 워커 spawn 성공 | `status`로 폴링 시작 |
-| 4 | Thread resume 실패 | `start`로 새 Thread 생성 후 재시도 |
+| 4 | 재개할 완료 turn 없음 / 롤아웃 미저장 | 먼저 `status` 재폴링(일시 오류는 supervisor가 자동 재시도). 완료 이력이 전혀 없을 때만 `start`로 새 Thread |
 | 6 | 프로세스 오류 (프롬프트 파일 없음 등) | 1회 재시도 후 PASS |
 
 **`status` 명령** (폴링):
@@ -550,7 +560,7 @@ After all issues, provide:
 |:---------:|------|------|
 | 0 | 완료 (`completed`) | 출력 파일 읽기 → PHASE 3 진행 |
 | 7 | 실행 중 (`queued` / `connecting` / `validating_model` / `starting_thread` / `waiting_first_output` / `streaming` / `reconnecting`) | 30초 후 재폴링 (묻지 않고 계속 대기, 2분마다 진행 안내) |
-| 5 | 타임아웃 (`timeout_partial`, 30분 safety net) | 부분 출력 읽기 → PHASE 3 진행 |
+| 5 | 타임아웃 (`timeout_partial`, `--timeout` 지정 시에만) | 부분 출력 읽기 → PHASE 3 진행 |
 | 8 | 취소됨 (`cancelled`) | 부분 출력이 있으면 읽기 |
 | 1 | codex 바이너리 없음 | 즉시 PASS |
 | 2 | 인증 실패 | 즉시 PASS — 사용자에게 `codex login` 안내 |
@@ -569,9 +579,9 @@ After all issues, provide:
 codex-review start → exit 0 (워커 시작됨)
   │
   ├─ status 폴링 루프 (30초 간격)
-  │   ├─ exit 7 → 실행 중 → 묻지 않고 계속 대기 (2분마다 진행 안내, 30분 하드 타임아웃까지)
+  │   ├─ exit 7 → 실행 중 → 묻지 않고 계속 대기 (2분마다 진행 안내, 무제한 — pidAlive/idleMs로 생존 확인)
   │   ├─ exit 0 → 완료 → 출력 파일 읽기 → PHASE 3
-  │   ├─ exit 5 → 타임아웃 → 부분 출력 읽기 → PHASE 3
+  │   ├─ exit 5 → 타임아웃(--timeout 지정 시) → 부분 출력 읽기 → PHASE 3
   │   ├─ exit 8 → 취소됨 → 부분 출력 있으면 읽기
   │   ├─ exit 1 → PASS (codex 미설치)
   │   ├─ exit 2 → PASS (인증 실패)
@@ -582,7 +592,7 @@ codex-review start → exit 0 (워커 시작됨)
   │   └─ codex-review cancel → 부분 출력 사용 또는 PASS
   │
   └─ start 자체 에러 시
-      ├─ exit 4 → start로 재시도 (Thread 손상)
+      ├─ exit 4 → status 재폴링(supervisor 자동 재시도) → 완료 이력 없을 때만 start로 새 Thread
       └─ exit 6 → 1회 재시도 → 재실패 시 PASS
 ```
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { appendEvent, createJob, recoverJobs } from "./lib/job-store.mjs";
 import { JobScheduler } from "./lib/job-scheduler.mjs";
-import { sameProject } from "./lib/project-scope.mjs";
+import { planFollowUp } from "./lib/follow-up.mjs";
 import {
   acquireStartupLock,
   createRuntimeServer,
@@ -267,10 +267,13 @@ async function main() {
         case "submit": {
           const request = { ...message.params };
           const sessionJobs = recoverJobs(runtimeDir)
-            .filter(job => job.sessionId === request.sessionId);
+            .filter(job => job.sessionId === request.sessionId)
+            .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
           const activeSessionJob = sessionJobs.find(job =>
             !["completed", "cancelled", "failed"].includes(job.status));
-          if (request.command === "start" && activeSessionJob) {
+          // A turn already in flight owns the thread; neither a fresh start nor a
+          // resume can run concurrently with it.
+          if (activeSessionJob) {
             const error = new Error(
               `Session ${request.sessionId} already has active job ${activeSessionJob.jobId}`,
             );
@@ -278,20 +281,15 @@ async function main() {
             throw error;
           }
           if (request.command === "follow-up" && !request.threadId) {
-            const previous = stateFor({ sessionId: request.sessionId });
-            if (!previous?.threadId || previous.status !== "completed") {
-              const error = new Error(`No completed v3 session to follow up: ${request.sessionId}`);
-              error.code = "THREAD_NOT_READY";
+            const plan = planFollowUp(sessionJobs, request);
+            if (plan.error) {
+              const error = new Error(plan.error.message);
+              error.code = plan.error.code;
               throw error;
             }
-            if (!sameProject(previous.projectRoot, request.projectRoot)) {
-              const error = new Error(`Session project mismatch: ${previous.projectRoot} != ${request.projectRoot}`);
-              error.code = "PROJECT_MISMATCH";
-              throw error;
-            }
-            request.threadId = previous.threadId;
-            if (!request.modelExplicit) request.model = previous.model;
-            if (!request.effortExplicit) request.effort = previous.effort;
+            request.threadId = plan.threadId;
+            request.model = plan.model;
+            request.effort = plan.effort;
           }
           const record = createJob(runtimeDir, request);
           const state = stateFor({ jobId: record.jobId });

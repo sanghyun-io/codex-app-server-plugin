@@ -35,6 +35,7 @@ const FOREIGN_DELTA = !!process.env.FAKE_FOREIGN_DELTA;
 const EXIT_AFTER_FIRST_DELTA = !!process.env.FAKE_EXIT_AFTER_FIRST_DELTA;
 const EXIT_ONCE_FILE = process.env.FAKE_EXIT_ONCE_FILE || "";
 const HANG_METHOD = process.env.FAKE_HANG_METHOD || "";
+const RESUME_FAIL = process.env.FAKE_RESUME_FAIL || "";
 const INITIALIZE_DELAY_MS = parseInt(process.env.FAKE_INITIALIZE_DELAY_MS || "0", 10);
 const PID_FILE = process.env.FAKE_PID_FILE || "";
 if (PID_FILE) writeFileSync(PID_FILE, `${process.pid}\n`, "utf8");
@@ -132,6 +133,10 @@ function handleRequest(msg) {
     }
 
     case "thread/resume":
+      if (RESUME_FAIL) {
+        send({ id, error: { message: RESUME_FAIL } });
+        break;
+      }
       send({ id, result: { thread: { id: params.threadId } } });
       break;
 
