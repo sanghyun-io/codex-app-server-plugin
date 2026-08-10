@@ -140,7 +140,7 @@ Claude가 한국어 최종 리포트를 쓸 때 위 레벨 규칙을 따른다 (
   ```bash
   cat "{HOME_LITERAL}/.claude/codex-review.config.json" 2>/dev/null || echo '{}'
   ```
-- **기본값 변경**: 사용자가 파일을 직접 편집하거나, "기본 말투 easy로 바꿔줘" 같이 요청하면 Claude가 이 파일의 `defaultTone`을 생성/수정한다(다른 키는 보존). **이 파일은 유저 데이터라 플러그인 재설치/업데이트로 덮이지 않는다.**
+- **기본값 변경**: `/codex-code-review:tone <level>` 명령(인자 없이 실행하면 현재 기본값 표시), 파일 직접 편집, 또는 "기본 말투 easy로 바꿔줘" 요청 — 어느 경우든 `defaultTone`만 갱신하고 다른 키는 보존한다. **이 파일은 유저 데이터라 플러그인 재설치/업데이트로 덮이지 않는다.**
 
 ### 세션 override / 라운드 간 유지
 
