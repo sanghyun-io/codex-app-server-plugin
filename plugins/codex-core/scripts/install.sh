@@ -95,6 +95,16 @@ fi
 
 echo ""
 
+# 4b. Seed the persistent transport default if absent (preserve existing keys such as defaultTone)
+node -e '
+const fs=require("fs"),os=require("os"),path=require("path");
+const p=path.join(os.homedir(),".claude","codex-review.config.json");
+let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
+if(!("transport" in c)){c.transport="ask";fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");console.log("seeded")}else{console.log("preserved:"+c.transport)}
+' >/dev/null 2>&1 && echo -e "✓ Ensured ${GREEN}transport${NC} default in ~/.claude/codex-review.config.json (ask)" || echo -e "${YELLOW}⚠️  Could not seed transport default (non-fatal)${NC}"
+
+echo ""
+
 # 5. CLAUDE.md auto-activation: clean up legacy markers + insert new ones
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 NEW_BEGIN="<!-- @codex-core:begin -->"

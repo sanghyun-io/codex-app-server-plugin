@@ -41,6 +41,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { resolveProjectRoot, sameProject } from "./lib/project-scope.mjs";
 import { ensureSupervisor, requestRuntime } from "./lib/runtime-ipc.mjs";
+import { resolveTransportPreference } from "./lib/plugin-config.mjs";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -2058,6 +2059,9 @@ Options:
   --model <MODEL>       Model to use (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
   --effort <LEVEL>      Reasoning effort to use (default: high)
   --timeout <MS>        Optional turn-duration cap in ms (default: none/unlimited, env: CODEX_REVIEW_TIMEOUT)
+  --transport <MODE>    Where to run Codex for this call: orca | app-server | ask
+                        (default: config.transport in ~/.claude/codex-review.config.json, else ask;
+                         env: CODEX_REVIEW_TRANSPORT). App Server is always the fallback when Orca is absent.
   --foreground          Run synchronously (v1 compat)
   --stdin               Read prompt from stdin, write to <prompt-file>
 
@@ -2098,6 +2102,7 @@ function parseArgs(argv) {
   let defaultModel = null;
   let timeout = null;
   let nonce = null;
+  let transport = null;
   let foreground = false;
   let stdin = false;
   const positional = [];
@@ -2119,6 +2124,8 @@ function parseArgs(argv) {
       timeout = parseInt(raw[++i], 10);
     } else if (raw[i] === "--nonce" && raw[i + 1]) {
       nonce = raw[++i];
+    } else if (raw[i] === "--transport" && raw[i + 1]) {
+      transport = raw[++i];
     } else if (raw[i] === "--foreground") {
       foreground = true;
     } else if (raw[i] === "--stdin") {
@@ -2143,6 +2150,8 @@ function parseArgs(argv) {
       defaultModel,
       timeout: DEFAULT_HARD_TIMEOUT_MS,
       nonce,
+      transport: resolveTransportPreference({ flag: transport }),
+      transportExplicit: transport !== null,
       foreground,
       stdin,
       isWorker,
@@ -2180,6 +2189,8 @@ function parseArgs(argv) {
     defaultModel,
     timeout: resolvedTimeout,
     nonce,
+    transport: resolveTransportPreference({ flag: transport }),
+    transportExplicit: transport !== null,
     foreground,
     stdin,
     isWorker,

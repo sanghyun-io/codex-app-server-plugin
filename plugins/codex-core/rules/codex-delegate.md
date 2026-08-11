@@ -19,7 +19,16 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 
 > **MUST DO**: 사용자가 Codex에게 작업을 위임하면 아래 워크플로를 반드시 수행한다.
 
-### 작업 위임 시작 시 (codex_delegate)
+### 0단계: Transport 결정 (먼저)
+
+작업 위임을 시작하기 전에 **Codex를 어디서 실행할지** 먼저 정한다 (아래 "Transport 결정" 섹션의 절차를 따른다). 결과는 `app-server` 또는 `orca` 둘 중 하나다.
+
+| 결정 | 이어서 따를 절차 |
+|------|------------------|
+| **app-server** (기본 / Orca 없음 / 명시) | 아래 "작업 위임 시작 시 — App Server 경로" 표 (A+ 루프) |
+| **orca** (Orca 실행 중 + 사용자 선택) | "Orca 대화창 경로" 섹션 (A+ 루프 대신 핸드오프) |
+
+### 작업 위임 시작 시 — App Server 경로 (codex_delegate)
 
 | Order | Action |
 |:-----:|--------|
@@ -46,6 +55,81 @@ Codex에게 자율적 작업을 위임하되, 실제 파일 변경은 Claude가 
 - ❌ 매 Turn fresh start (Thread 재사용 필수)
 - ❌ 전체 컨텍스트 재전송 (follow-up에는 증분만)
 - ❌ Codex 판단 없이 Claude가 독자적으로 설계 변경 (Codex가 두뇌 역할 유지)
+
+> 위 A+ 원칙과 금지 사항은 **App Server 경로에만** 적용된다. Orca 대화창 경로(transport=orca)는 사용자가 직접 대화하므로 Claude가 A+ 적용 루프를 돌리지 않는다 (아래 "Orca 대화창 경로" 참조).
+
+---
+
+## Transport 결정 (App Server vs Orca 대화창)
+
+Codex 실행 위치를 아래 순서로 정한다. 최종 후보는 `app-server` 또는 `orca` 둘 중 하나이며, **Orca가 없으면 언제나 `app-server`로 폴백**한다.
+
+### 결정 절차
+
+1. **기본값 읽기** — `~/.claude/codex-review.config.json`의 `transport`를 읽는다 (없으면 `ask`):
+   ```bash
+   node -e 'const fs=require("fs"),os=require("os"),path=require("path"),p=path.join(os.homedir(),".claude","codex-review.config.json");let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}process.stdout.write(c.transport||"ask")'
+   ```
+2. **이번 호출 오버라이드** — `$ARGUMENTS`에 `--transport <orca|app-server|ask>`가 있으면 그 값이 config보다 우선 (config 파일은 건드리지 않는다).
+3. **Orca 가용성 확인** (결정값이 `app-server`가 아닐 때만) — `orca status --json`의 `result.app.running`이 true인지 본다. Orca가 없거나 응답이 없으면 **묻지 않고 `app-server`로 확정**한다.
+4. **값별 처리**
+   - `app-server` → 아래 App Server 경로(A+ 루프)로 진행.
+   - `orca` (+ Orca 실행 중) → "Orca 대화창 경로"로 진행.
+   - `ask` (+ Orca 실행 중) → **최초 1회만** AskUserQuestion으로 물어보고, 답을 config에 저장하여 이후에는 다시 묻지 않는다:
+     ```bash
+     node -e 'const fs=require("fs"),os=require("os"),path=require("path"),p=path.join(os.homedir(),".claude","codex-review.config.json");let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}c.transport=process.argv[1];fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")' <orca|app-server>
+     ```
+     저장한 값의 경로로 이어서 진행한다.
+
+> 기본값을 나중에 바꾸려면 `/codex-core:transport`. 이번 한 번만 다르게 하려면 명령에 `--transport`.
+
+### AskUserQuestion 예시 (`ask` + Orca 실행 중, 최초 1회)
+
+`question`/`header`/`label`/`description`에는 이모지·박스문자 등 비-ASCII 장식 문자를 넣지 않는다 (일반 한글+ASCII만).
+
+```json
+{
+  "questions": [{
+    "question": "Orca가 실행 중입니다. Codex를 어디서 열까요? (이 선택은 기본값으로 저장되어 다음부터는 묻지 않습니다)",
+    "header": "Codex 실행 위치",
+    "multiSelect": false,
+    "options": [
+      {"label": "Orca 대화창", "description": "Orca 터미널에 codex를 띄우고 그 창에서 직접 대화 / 이어가기"},
+      {"label": "App Server (기존)", "description": "Claude가 결과를 받아 파일에 적용하는 기존 방식"}
+    ]
+  }]
+}
+```
+
+---
+
+## Orca 대화창 경로 (transport = orca)
+
+Orca 터미널에 codex를 **사람이 보는 대화창**으로 열고, 첫 프롬프트를 넣은 뒤 **사용자에게 소유권을 넘긴다.** 이 경로에서 Claude는 A+ 적용 루프(결과 파싱 · Edit/Write)를 돌리지 않는다 — 화면이 곧 결과이고, 사용자가 직접 이어간다.
+
+> 전제: `orca-cli` 스킬의 명령 표면을 사용한다. 실행 파일은 그 스킬의 "Resolve the CLI" 규칙으로 고른다 (managed WSL은 `ORCA_CLI_COMMAND`, 그 외에는 `orca`). 아래에서 `ORCA`는 그 실행 파일이다.
+
+### 절차
+
+| Order | Action |
+|:-----:|--------|
+| 1 | `ORCA status --json` 재확인 (`result.app.running`=false면 즉시 App Server 경로로 폴백) |
+| 2 | codex 실행 인자 조립 — 모델은 `--model <model>`, effort는 `-c model_reasoning_effort=<effort>`. 예: `codex --model gpt-5.6-terra -c model_reasoning_effort="high"`. `--read-only`면 모델 기본을 `gpt-5.6-luna`로 |
+| 3 | 터미널 생성 — `ORCA terminal create --worktree active --title "codex: <작업 요약>" --command "<조립된 codex 명령>" --json` → 반환된 `terminal.handle` 보관 |
+| 4 | TUI 준비 대기 — `ORCA terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json`. `blockedReason`이 `codex-update-prompt`면 `ORCA terminal send --terminal <handle> --text "2"`(Skip) 후 다시 wait |
+| 5 | 첫 프롬프트 전송 — `ORCA terminal send --terminal <handle> --text "<작업 브리핑>" --enter --json` |
+| 6 | 사용자에게 안내(한국어, 쉬운 말) — "Orca에 codex 대화창을 열었어요. 이제 그 창에서 직접 이어서 대화하시면 됩니다." + 필요 시 아래 이어가기 안내 |
+
+### 이어가기 / 다른 worktree로 넘기기 (handoff)
+
+- codex 세션은 종료 후에도 `~/.codex/sessions/.../rollout-*.jsonl`에 남으므로 언제든 재개할 수 있다.
+- 같은/다른 worktree의 새 터미널에서 이어받기: `ORCA terminal create --worktree <selector> --command "codex resume --last" --json` (특정 세션은 `codex resume <session-id>`). update-prompt 처리는 위 4단계와 동일.
+
+### 이 경로의 금지 사항
+
+- ❌ Claude가 codex 화면을 스크래핑해 결과를 파일에 적용 (이 경로는 사용자 소유 — A+ 루프 금지)
+- ❌ Orca가 없는데 orca 경로 강행 (반드시 App Server 폴백)
+- ❌ `--dangerously-bypass-approvals-and-sandbox` 등 승인 우회를 사용자 동의 없이 추가 (codex 기본 승인 정책 유지)
 
 ---
 

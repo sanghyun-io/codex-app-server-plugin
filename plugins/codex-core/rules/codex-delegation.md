@@ -26,10 +26,10 @@ triggers:
 | Order | Action |
 |:-----:|--------|
 | 1 | 발화에서 **핵심 동사**와 **대상**을 추출한다 |
-| 2 | **모델명 + effort 추출** — `{모델} {effort}(으)로`, `with {model} at {effort} effort` 등 패턴 매칭 (각각 없으면 스킵) |
+| 2 | **모델명 + effort + transport 추출** — `{모델} {effort}(으)로`, `with {model} at {effort} effort`, `Orca로`/`App Server로` 등 패턴 매칭 (각각 없으면 스킵) |
 | 3 | 아래 **의도 분류 표**로 스킬을 선택한다 |
 | 4 | 복수 의도로 해석될 수 있으면 **AskUserQuestion**으로 확정한다 (추측 금지) |
-| 5 | 선택한 스킬을 실행한다 — 추출된 모델은 `--model <X>`, effort는 `--effort <Y>` 인수로 자동 부착 (스킬 내부 절차는 해당 SKILL.md 참조) |
+| 5 | 선택한 스킬을 실행한다 — 추출된 모델은 `--model <X>`, effort는 `--effort <Y>`, 실행 위치는 `--transport <T>` 인수로 자동 부착 (스킬 내부 절차는 해당 SKILL.md 참조) |
 
 ---
 
@@ -228,6 +228,56 @@ Claude: codex-review close로 Thread 종료
 
 ---
 
+## Transport 의도 추출 (실행 위치)
+
+발화에서 **Codex를 어디서 실행할지**(Orca 대화창 vs App Server)를 추출하여 `--transport <X>`로 주입한다.
+모델/effort 추출과 **독립적**이며, 주로 **작업 위임(delegate)** 의도에서 의미가 있다 (리뷰 계열은 App Server 고정).
+
+### 추출 패턴
+
+#### 한국어
+
+| 패턴 | 예시 발화 | 추출 |
+|------|-----------|------|
+| `Orca로` / `Orca에서` / `Orca 터미널로` | "이 버그 Orca로 열어서 봐줘" | `orca` |
+| `Orca로 켜` / `Orca로 열어` / `대화창으로` | "Orca 대화창으로 codex 켜줘" | `orca` |
+| `App Server로` / `앱서버로` / `기존 방식으로` | "그냥 App Server로 돌려" | `app-server` |
+| `어디서 할지 물어봐` | "실행 위치는 물어봐 줘" | `ask` |
+
+#### 영어
+
+| 패턴 | 예시 발화 | 추출 |
+|------|-----------|------|
+| `in Orca` / `open in an Orca terminal` | "open this in Orca" | `orca` |
+| `as a conversation` | "run it as a conversation I can drive" | `orca` |
+| `use App Server` / `the usual way` | "just use App Server" | `app-server` |
+
+### 인식 값
+
+`orca`, `app-server`, `ask` 셋만 유효하다. 그 외 토큰은 transport로 추정하지 않는다.
+
+### 라우팅 결과 예시
+
+| 발화 | 라우팅 |
+|------|--------|
+| "Codex에게 이 버그 Orca로 열어서 봐줘" | `/delegate "이 버그" --transport orca` |
+| "Orca 대화창으로 codex 켜서 리팩터 부탁" | `/delegate "리팩터" --transport orca` |
+| "이 함수 왜 느린지 Orca로 물어봐" | `/delegate "이 함수 왜 느린지" --read-only --transport orca` |
+| "그냥 기존 방식으로 이 버그 고쳐줘" | `/delegate "이 버그 고쳐줘" --transport app-server` |
+
+### 모호 / 충돌 처리
+
+| 상황 | 처리 |
+|------|------|
+| transport 언급 없음 | `--transport` 미부착 (delegate 절차가 config `transport` / `ask`로 결정) |
+| **리뷰 의도(code-review/red-review) + Orca 언급** | 리뷰 계열은 현재 App Server 전용 → Orca 요청은 무시하고 그대로 진행하되, 한 줄로 "리뷰는 App Server로 실행됨"을 알린다 |
+| 슬래시 커맨드의 `--transport X`와 자연어가 충돌 | 슬래시 커맨드 우선 |
+| Orca가 실행 중이 아님 | delegate 절차가 자동으로 App Server로 폴백 (transport=orca여도) |
+
+> 실제 Orca 대화창 실행 절차와 폴백 규칙은 `codex-delegate.md`의 "Orca 대화창 경로"를 따른다.
+
+---
+
 ## 세션 네이밍 규약
 
 각 스킬은 고유한 prefix를 사용하여 다른 세션과 구분한다:
@@ -268,5 +318,5 @@ Claude: codex-review close로 Thread 종료
 
 ---
 
-*Related*: `review-protocol.md`, `codex-code-review.md`, `rule-format.md`
-*Last modified*: 2026-04-10
+*Related*: `review-protocol.md`, `codex-code-review.md`, `codex-delegate.md`, `rule-format.md`
+*Last modified*: 2026-08-11
