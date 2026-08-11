@@ -107,7 +107,13 @@ Codex 실행 위치를 아래 순서로 정한다. 최종 후보는 `app-server`
 
 Orca 터미널에 codex를 **사람이 보는 대화창**으로 열고, 첫 프롬프트를 넣은 뒤 **사용자에게 소유권을 넘긴다.** 이 경로에서 Claude는 A+ 적용 루프(결과 파싱 · Edit/Write)를 돌리지 않는다 — 화면이 곧 결과이고, 사용자가 직접 이어간다.
 
-> 전제: `orca-cli` 스킬의 명령 표면을 사용한다. 실행 파일은 그 스킬의 "Resolve the CLI" 규칙으로 고른다 (managed WSL은 `ORCA_CLI_COMMAND`, 그 외에는 `orca`). 아래에서 `ORCA`는 그 실행 파일이다.
+> **실행 파일 결정 (미리 명시 — 정상 흐름에선 `orca-cli` 스킬 로드도 `orca skills get`도 불필요):**
+> 아래에서 `ORCA`는 이 실행 파일이다.
+> - `ORCA_CLI_COMMAND` 환경변수가 있으면 그 값 (Orca-managed WSL 세션)
+> - 그 외 Windows / Orca-managed 터미널: `orca`
+> - Linux의 Orca 비-managed 셸: `orca-ide` (bare `orca`는 GNOME 스크린리더라 금지)
+>
+> 이 경로에 필요한 명령은 아래 절차의 `create` / `wait` / `send` / `read` (+ 이어가기의 `resume` / `close`)가 전부다. **정상 흐름에서는 이 명령들을 그대로 쓰고 전체 가이드를 fetch하지 않는다.** 명령이 `unknown command`나 알 수 없는 플래그로 실패하거나 orca가 업데이트된 정황이면 — **그때만** `orca-cli` 스킬을 로드해(`orca skills get orca-cli`) 버전에 맞는 최신 명령 표면을 확인하고 재시도한다.
 
 ### 절차
 
