@@ -16,7 +16,7 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 - `(no args)` — Review current branch vs default branch
 - `PR#N` — Review PR number N via `gh pr diff N`
 - `--base <ref>` — Review against a specific base ref
-- `--model <name>` — Override Codex model (workflow default: `gpt-5.6-terra`, env: `CODEX_REVIEW_MODEL`)
+- `--model <name>` — Override Codex model (workflow default: `gpt-6.1-sol`, env: `CODEX_REVIEW_MODEL`)
 - `--effort <level>` — Override reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default: `high`)
 - `--tone <level>` — Result readability: `easy` (비개발자), `plain` (풀어서), `normal` (평범하게), `deep` (아주 자세히). Session-only override; the persistent default is `defaultTone` in `~/.claude/codex-review.config.json` (else `plain`). Distinct from `--effort` (readability vs reasoning depth).
 - `--with-opus` — Enable Opus cross-validation after Codex review
@@ -26,7 +26,7 @@ Start a multi-round code review session following the protocol in `~/.claude/rul
 ```
 /codex-code-review:code-review
 /codex-code-review:code-review PR#123
-/codex-code-review:code-review --base develop --model gpt-5.6-sol --effort max
+/codex-code-review:code-review --base develop --model gpt-6.1-sol --effort max
 /codex-code-review:code-review --with-opus
 ```
 

@@ -40,6 +40,8 @@ const INITIALIZE_DELAY_MS = parseInt(process.env.FAKE_INITIALIZE_DELAY_MS || "0"
 const PID_FILE = process.env.FAKE_PID_FILE || "";
 if (PID_FILE) writeFileSync(PID_FILE, `${process.pid}\n`, "utf8");
 const MODELS = JSON.parse(process.env.FAKE_MODELS || JSON.stringify([
+  "gpt-6.1-sol",
+  "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",

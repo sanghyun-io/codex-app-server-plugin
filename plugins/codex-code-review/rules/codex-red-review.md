@@ -74,10 +74,10 @@ review-protocol.md의 **증분 Diff 추출** 섹션을 따른다 (Round 1 = 전�
 review-protocol.md의 실행 규칙을 따른다. 세션 이름은 `rr_{SID}`:
 
 ```bash
-node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/rr_{SID}_r1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/rr_{SID}_r1_output.txt" --session "rr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" --default-model "gpt-5.6-sol"; echo "EXIT_CODE: $?"
+node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start "{HOME_LITERAL}/.claude/tmp/rr_{SID}_r1_prompt.txt" "{HOME_LITERAL}/.claude/tmp/rr_{SID}_r1_output.txt" --session "rr_{SID}" --review-dir "{HOME_LITERAL}/.claude/tmp" --default-model "gpt-6.1-sol"; echo "EXIT_CODE: $?"
 ```
 
-`gpt-5.6-sol`은 red-review의 내부 기본값이다. `$ARGUMENTS`에 `--model <X>`가 있으면 위 명령 끝에 `--model "<X>"`를 추가하며, 사용자 지정 모델이 `--default-model`보다 우선한다. `CODEX_REVIEW_MODEL`도 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다.
+`gpt-6.1-sol`은 red-review의 내부 기본값이다. `$ARGUMENTS`에 `--model <X>`가 있으면 위 명령 끝에 `--model "<X>"`를 추가하며, 사용자 지정 모델이 `--default-model`보다 우선한다. `CODEX_REVIEW_MODEL`도 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다.
 모델 및 effort 오버라이드 처리 규칙은 `codex-code-review.md`의 **모델 및 effort 오버라이드 처리** 섹션을 동일하게 따른다. `start`에서 지정한 모델과 effort는 `rr_{SID}_state.json`에 저장되어 follow-up에 자동 재사용된다.
 
 폴링 패턴은 code-review와 동일 (30초 간격, Bash 포그라운드, 묻지 않고 계속 대기, 2분마다 진행 안내, turn 지속시간 무제한).
@@ -206,7 +206,7 @@ code-review의 최종 리포트 형식을 기반으로 하되, verdict 줄을 �
 ```
 | 모델 | 최종 라운드 |
 |---|---|
-| Codex (gpt-5.6-sol) | SECURE / AT_RISK / COMPROMISED |
+| Codex (gpt-6.1-sol) | SECURE / AT_RISK / COMPROMISED |
 | Opus (선택) | SECURE / AT_RISK / COMPROMISED |
 | **종합** | **SECURE / AT_RISK / COMPROMISED** |
 ```

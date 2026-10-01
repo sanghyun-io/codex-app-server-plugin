@@ -302,7 +302,7 @@ export class AppServerClient {
         input: [{ type: "text", text: prompt }],
         cwd: options.cwd,
         model: options.model,
-        effort: options.effort || "high",
+        effort: options.effort || "xhigh",
       }).then(result => {
         if (settled) return;
         turnId = result?.turn?.id || null;

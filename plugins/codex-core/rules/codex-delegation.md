@@ -150,24 +150,24 @@ Claude: codex-review close로 Thread 종료
 
 | 패턴 | 예시 발화 | 추출 모델 |
 |------|-----------|----------|
-| `{모델}(으)로` | "gpt-5.6-sol로 리뷰해줘" | `gpt-5.6-sol` |
+| `{모델}(으)로` | "gpt-6.1-sol로 리뷰해줘" | `gpt-6.1-sol` |
 | `{모델} 사용해서` | "o1 사용해서 검토 부탁" | `o1` |
 | `{모델} 써서` | "claude-3.5-sonnet 써서 분석" | `claude-3.5-sonnet` |
-| `{모델} 모델로` | "gpt-5.6-terra 모델로 위임" | `gpt-5.6-terra` |
+| `{모델} 모델로` | "gpt-6.1-sol 모델로 위임" | `gpt-6.1-sol` |
 
 #### 영어
 
 | 패턴 | 예시 발화 | 추출 모델 |
 |------|-----------|----------|
-| `with {model}` | "Have Codex review with gpt-5.6-sol" | `gpt-5.6-sol` |
+| `with {model}` | "Have Codex review with gpt-6.1-sol" | `gpt-6.1-sol` |
 | `using {model}` | "Ask Codex using o1" | `o1` |
-| `{model} model` | "use gpt-5.6-terra model" | `gpt-5.6-terra` |
+| `{model} model` | "use gpt-6.1-sol model" | `gpt-6.1-sol` |
 
 ### 모델명 인식 휴리스틱
 
 다음 prefix 중 하나로 시작하는 토큰을 모델명 후보로 간주한다:
 
-- `gpt-*` (예: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`)
+- `gpt-*` (예: `gpt-6.1-sol`, `gpt-6.1-sol`, `gpt-6-luna`)
 - `o1*`, `o3*`, `o4*` (예: `o1`, `o1-mini`, `o3-pro`)
 - `claude-*` (예: `claude-3.5-sonnet`)
 - `gemini-*`
@@ -181,11 +181,11 @@ Claude: codex-review close로 Thread 종료
 
 | 발화 | 라우팅 |
 |------|--------|
-| "Codex에게 gpt-5.6-sol로 리뷰 부탁해" | `/code-review --model gpt-5.6-sol` |
-| "Codex에게 gpt-5.6-sol max 로 이 버그 고쳐달라고 해" | `/delegate "이 버그 고쳐줘" --model gpt-5.6-sol --effort max` |
+| "Codex에게 gpt-6.1-sol로 리뷰 부탁해" | `/code-review --model gpt-6.1-sol` |
+| "Codex에게 gpt-6.1-sol max 로 이 버그 고쳐달라고 해" | `/delegate "이 버그 고쳐줘" --model gpt-6.1-sol --effort max` |
 | "Codex로 o1 써서 보안 검토" | `/red-review --model o1` |
-| "Have Codex fix the bug using gpt-5.6-terra" | `/delegate "fix the bug" --model gpt-5.6-terra` |
-| "gpt-5.6-luna 모델로 이 함수 왜 느린지 물어봐" | `/delegate "이 함수 왜 느린지" --read-only --model gpt-5.6-luna` |
+| "Have Codex fix the bug using gpt-6.1-sol" | `/delegate "fix the bug" --model gpt-6.1-sol` |
+| "gpt-6-luna 모델로 이 함수 왜 느린지 물어봐" | `/delegate "이 함수 왜 느린지" --read-only --model gpt-6-luna` |
 
 ### 모호 / 충돌 처리
 
@@ -208,7 +208,7 @@ Claude: codex-review close로 Thread 종료
 
 | 패턴 | 예시 발화 | 라우팅 인수 |
 |------|-----------|-------------|
-| `{모델} {effort}(으)로` | "gpt-5.6-sol max 로 이 버그 고쳐줘" | `--model gpt-5.6-sol --effort max` |
+| `{모델} {effort}(으)로` | "gpt-6.1-sol max 로 이 버그 고쳐줘" | `--model gpt-6.1-sol --effort max` |
 | `{effort} effort로` | "max effort로 Codex에게 검토시켜" | `--effort max` |
 | `추론 강도 {effort}` | "Codex 추론 강도 ultra로 분석해" | `--effort ultra` |
 | `at {effort} effort` | "Have Codex fix it at max effort" | `--effort max` |
@@ -221,7 +221,7 @@ Claude: codex-review close로 Thread 종료
 
 | 상황 | 처리 |
 |------|------|
-| effort가 발화에 없음 | `--effort` 미부착 (wrapper 기본값 `high`) |
+| effort가 발화에 없음 | `--effort` 미부착 (wrapper 기본값 `xhigh`) |
 | effort 후보가 2개 이상 | AskUserQuestion으로 사용자 확인 |
 | 슬래시 커맨드의 `--effort X`와 자연어 effort가 충돌 | 슬래시 커맨드 값 우선 |
 | follow-up에서 다른 effort 명시 | 같은 세션의 해당 turn부터 새 effort를 사용하고 이후 follow-up에도 유지 |

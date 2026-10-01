@@ -120,7 +120,7 @@ Orca 터미널에 codex를 **사람이 보는 대화창**으로 열고, 첫 프�
 | Order | Action |
 |:-----:|--------|
 | 1 | `ORCA status --json` 재확인 (`result.app.running`=false면 즉시 App Server 경로로 폴백) |
-| 2 | codex 실행 인자 조립 — 모델은 `--model <model>`, effort는 `-c model_reasoning_effort=<effort>`. 예: `codex --model gpt-5.6-terra -c model_reasoning_effort="high"`. `--read-only`면 모델 기본을 `gpt-5.6-luna`로 |
+| 2 | codex 실행 인자 조립 — 모델은 `--model <model>`, effort는 `-c model_reasoning_effort=<effort>`. 예: `codex --model gpt-6.1-sol -c model_reasoning_effort="high"`. `--read-only`면 모델 기본을 `gpt-6-luna`로 |
 | 3 | 터미널 생성 — `ORCA terminal create --worktree active --title "codex: <작업 요약>" --command "<조립된 codex 명령>" --json` → 반환된 `terminal.handle` 보관 |
 | 4 | TUI 준비 대기 — `ORCA terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json`. `blockedReason`이 `codex-update-prompt`면 `ORCA terminal send --terminal <handle> --text "2"`(Skip) 후 다시 wait |
 | 5 | 첫 프롬프트 전송 — `ORCA terminal send --terminal <handle> --text "<작업 브리핑>" --enter --json` |
@@ -165,8 +165,8 @@ Orca 터미널에 codex를 **사람이 보는 대화창**으로 열고, 첫 프�
 | 상황 | 처리 |
 |------|------|
 | `--model <X>` 명시 | Turn 1 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
-| 미명시 + 일반 위임 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
-| 미명시 + `--read-only` | `--default-model "gpt-5.6-luna"` 추가 (`CODEX_REVIEW_MODEL`이 있으면 환경변수가 우선) |
+| 미명시 + 일반 위임 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-6.1-sol` 사용) |
+| 미명시 + `--read-only` | `--default-model "gpt-6-luna"` 추가 (`CODEX_REVIEW_MODEL`이 있으면 환경변수가 우선) |
 
 > **follow-up 자동 처리**: `start`에서 지정한 모델은 `dg_{SID}_state.json`에 저장되어
 > 후속 `follow-up` 호출에서 자동 재사용된다. follow-up에 `--model`을 다시 명시할 필요는 없다.
@@ -176,7 +176,7 @@ Orca 터미널에 codex를 **사람이 보는 대화창**으로 열고, 첫 프�
 `$ARGUMENTS`에서 `--effort <level>`을 확인한다. 허용되는 자연어 라우팅 값은
 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`이며, 지정된 값은 Turn 1
 `codex-review start` 호출에 `--effort "<level>"`로 추가한다. 미지정 시 wrapper
-기본값 `high`를 사용한다.
+기본값 `xhigh`를 사용한다.
 
 `start`에서 선택한 effort는 세션 상태에 저장되므로 follow-up에 다시 적지 않아도
 유지된다. follow-up에 `--effort`를 명시하면 해당 turn부터 새 값으로 변경된다.
@@ -197,7 +197,7 @@ PROMPT_EOF
 echo "EXIT_CODE: $?"
 ```
 
-`$ARGUMENTS`에 `--read-only`가 있으면 위 명령에 `--default-model "gpt-5.6-luna"`를 추가한다. `$ARGUMENTS`에 `--model <X>`도 있으면 `--model "<X>"`를 함께 추가하며 사용자 지정 모델이 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다 (예: `--review-dir "..." --default-model "gpt-5.6-luna" --model "gpt-5.6-sol" --effort "max" <<'PROMPT_EOF'`).
+`$ARGUMENTS`에 `--read-only`가 있으면 위 명령에 `--default-model "gpt-6-luna"`를 추가한다. `$ARGUMENTS`에 `--model <X>`도 있으면 `--model "<X>"`를 함께 추가하며 사용자 지정 모델이 내부 기본값보다 우선한다. `$ARGUMENTS`에 `--effort <level>`이 있으면 `--effort "<level>"`도 추가한다 (예: `--review-dir "..." --default-model "gpt-6-luna" --model "gpt-6.1-sol" --effort "max" <<'PROMPT_EOF'`).
 
 ### Step 2: 폴링
 

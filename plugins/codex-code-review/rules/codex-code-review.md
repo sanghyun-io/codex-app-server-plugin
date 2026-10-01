@@ -43,8 +43,8 @@ triggers:
 | (없음) | 현재 브랜치 vs default branch (`git diff $DEFAULT_BRANCH...HEAD`) |
 | `PR#N` | `gh pr diff N` |
 | `--base <ref>` | `git diff <ref>...HEAD` |
-| `--model <name>` | Codex 모델 오버라이드 (workflow default: `gpt-5.6-terra`, env: `CODEX_REVIEW_MODEL`) |
-| `--effort <level>` | Codex 추론 강도 오버라이드 (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`; 기본값 `high`) |
+| `--model <name>` | Codex 모델 오버라이드 (workflow default: `gpt-6.1-sol`, env: `CODEX_REVIEW_MODEL`) |
+| `--effort <level>` | Codex 추론 강도 오버라이드 (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`; 기본값 `xhigh`) |
 | `--tone <level>` | 리뷰 결과 말투/난이도 (`easy`/`plain`/`normal`/`deep`; 기본값 `plain`) — 위 "말투(Tone) 단계 처리" 참조 |
 | `--with-opus` | Opus 교차검증 활성화 |
 
@@ -68,9 +68,9 @@ CURRENT_COMMIT=$(git rev-parse HEAD)
 | 상황 | 처리 |
 |------|------|
 | `--model <X>` 명시 | 모든 `codex-review start` 호출에 `--model "<X>"` 인자 추가 |
-| `--model` 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-5.6-terra` 사용) |
+| `--model` 미명시 | 인자 생략 (CLI가 `CODEX_REVIEW_MODEL` 환경변수 또는 기본값 `gpt-6.1-sol` 사용) |
 | `--effort <level>` 명시 | 모든 `codex-review start` 호출에 `--effort "<level>"` 인자 추가 |
-| `--effort` 미명시 | 인자 생략 (wrapper 기본값 `high`) |
+| `--effort` 미명시 | 인자 생략 (wrapper 기본값 `xhigh`) |
 | `--tone <level>` 명시 | 해당 레벨을 Layer 1(`{TONE_DIRECTIVE}`)·Layer 2(최종 보고)에 적용(세션 override). codex-review에는 전달하지 않음 |
 | `--tone` 미명시 | 설정 파일 `defaultTone`(영속 기본값) 적용, 없으면 `plain` — 아래 "말투(Tone) 단계 처리" 참조 |
 
@@ -97,7 +97,7 @@ node "{HOME_LITERAL}/.claude/bin/codex-review.mjs" start \
 ### 최종 리포트에 모델 표시
 
 `codex-review status` 또는 `cr_{SID}_state.json`에서 실제 사용된 모델을 추출하여 최종 리포트의
-"심사 모델" / "최종 Verdict" 섹션의 `Codex (gpt-5.6-terra)` 표기를 실제 모델명으로 교체한다.
+"심사 모델" / "최종 Verdict" 섹션의 `Codex (gpt-6.1-sol)` 표기를 실제 모델명으로 교체한다.
 
 ---
 
@@ -295,7 +295,7 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 - **라운드 수**: {total_rounds}
 
 ## 심사 모델
-- Codex (gpt-5.6-terra): {라운드별 verdict 요약}
+- Codex (gpt-6.1-sol): {라운드별 verdict 요약}
 - Opus 교차검증: ✅ / ⏭️ SKIP (사유)
 
 ---
@@ -326,7 +326,7 @@ Opus 교차검증 실패 시 Codex 결과만으로 진행 (리포트에 "Opus �
 
 | 모델 | 최종 라운드 |
 |---|---|
-| Codex (gpt-5.6-terra) | APPROVE / REVISE / REJECT |
+| Codex (gpt-6.1-sol) | APPROVE / REVISE / REJECT |
 | Opus (선택) | APPROVE / REVISE / REJECT |
 | **종합** | **APPROVE / REVISE / REJECT** |
 ```

@@ -83,7 +83,7 @@ async function main() {
 
     const result = await client.startTurn(threadId, request.prompt, {
       model: request.model,
-      effort: request.effort || "high",
+      effort: request.effort || "xhigh",
       cwd: request.projectRoot,
       timeoutMs: request.timeoutMs,
       cancelSignal: () => existsSync(paths.cancelPath),

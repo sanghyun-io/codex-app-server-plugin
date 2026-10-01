@@ -1246,7 +1246,7 @@ describe("model payload consistency", () => {
   after(async () => stopBroker(MODEL_BROKER_HOME));
 
   const cases = [
-    { name: "wrapper default", args: [], opts: {}, expected: "gpt-5.6-terra" },
+    { name: "wrapper default", args: [], opts: {}, expected: "gpt-6.1-sol" },
     {
       name: "explicit model",
       args: ["--model", "gpt-5.6-sol"],

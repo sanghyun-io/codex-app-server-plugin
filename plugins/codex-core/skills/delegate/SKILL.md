@@ -18,16 +18,16 @@ Follow the complete workflow defined in `~/.claude/rules/codex-delegate.md`.
 ## Arguments
 
 - `<task description>` — Free-form task description (e.g., "Fix the null pointer in UserService.login")
-- `--model <name>` — Override Codex model (default: `gpt-5.6-terra`)
+- `--model <name>` — Override Codex model (default: `gpt-6.1-sol`)
 - `--effort <level>` — Override reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default: `high`)
-- `--read-only` — Question-answer mode using `gpt-5.6-luna` by default; Codex answers without proposing file changes
+- `--read-only` — Question-answer mode using `gpt-6-luna` by default; Codex answers without proposing file changes
 - `--transport <mode>` — Where to run Codex for this call: `orca` (open a codex conversation you drive in an Orca terminal), `app-server` (the default A+ flow where Claude applies changes), or `ask`. Overrides the saved default for this call only; set the persistent default with `/codex-core:transport`. When Orca is not running, App Server is always used.
 
 ## Examples
 
 ```
 /codex-core:delegate Refactor auth middleware to use JWT instead of session tokens
-/codex-core:delegate Find and fix the race condition in OrderService --model gpt-5.6-sol --effort max
+/codex-core:delegate Find and fix the race condition in OrderService --model gpt-6.1-sol --effort max
 /codex-core:delegate Why does /api/v1/users return 500 when email is null --read-only
 ```
 

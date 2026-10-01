@@ -11,7 +11,7 @@
  *   close      --session <SID> --review-dir <DIR>                     Clean up all session files
  *
  * Options:
- *   --model <MODEL>       Model override (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
+ *   --model <MODEL>       Model override (default: gpt-6.1-sol, env: CODEX_REVIEW_MODEL)
  *   --effort <LEVEL>      Reasoning effort override (default: high)
  *   --timeout <MS>        Optional turn-duration cap in ms (default: none/unlimited, env: CODEX_REVIEW_TIMEOUT)
  *   --foreground          Run synchronously (v1 compat, no background worker)
@@ -47,8 +47,8 @@ import { resolveTransportPreference } from "./lib/plugin-config.mjs";
 // Config
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MODEL = "gpt-5.6-terra";
-const DEFAULT_EFFORT = "high";
+const DEFAULT_MODEL = "gpt-6.1-sol";
+const DEFAULT_EFFORT = "xhigh";
 const DEFAULT_HARD_TIMEOUT_MS = 0; // 0 = no turn-duration cap; opt-in via --timeout / CODEX_REVIEW_TIMEOUT
 const INIT_TIMEOUT_MS = 30_000;            // 30s for init/auth requests
 const PROGRESS_INTERVAL_MS = 3_000;        // 3s between progress file writes
@@ -448,7 +448,7 @@ class AppServerClient {
           input: [{ type: "text", text: inputText }],
           cwd: opts.cwd,
           model: opts.model || DEFAULT_MODEL,
-          effort: opts.effort || "high",
+          effort: opts.effort || "xhigh",
         },
         INIT_TIMEOUT_MS
       ).then((result) => {
@@ -860,7 +860,7 @@ class BrokerClient {
           input: [{ type: "text", text: inputText }],
           cwd: opts.cwd,
           model: opts.model || DEFAULT_MODEL,
-          effort: opts.effort || "high",
+          effort: opts.effort || "xhigh",
         },
         INIT_TIMEOUT_MS
       ).then((result) => {
@@ -2056,7 +2056,7 @@ Usage:
   codex-review scope      [<base-ref>]
 
 Options:
-  --model <MODEL>       Model to use (default: gpt-5.6-terra, env: CODEX_REVIEW_MODEL)
+  --model <MODEL>       Model to use (default: gpt-6.1-sol, env: CODEX_REVIEW_MODEL)
   --effort <LEVEL>      Reasoning effort to use (default: high)
   --timeout <MS>        Optional turn-duration cap in ms (default: none/unlimited, env: CODEX_REVIEW_TIMEOUT)
   --transport <MODE>    Where to run Codex for this call: orca | app-server | ask
